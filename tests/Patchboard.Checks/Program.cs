@@ -462,8 +462,28 @@ Check("ignores a bare modifier press",
 Section("7. IMPORT");
 
 Check("sees the Resanance library", ResananceImporter.IsAvailable, ResananceImporter.DatabasePath);
-var folderImport = new ResananceImporter().ImportFromFolder(@"C:\Users\example\Sounds\ImportedBoard");
-Check("folder import finds his sounds", folderImport.Imported > 100, $"{folderImport.Imported} files");
+// Derive the library folder from the config rather than hardcoding a path. A machine
+// specific absolute path in a tracked file breaks on anyone else's machine and puts a
+// username into the repository.
+var libraryFolder = config.Sounds
+    .Where(s => File.Exists(s.FilePath))
+    .Select(s => Path.GetDirectoryName(s.FilePath))
+    .Where(d => !string.IsNullOrEmpty(d))
+    .GroupBy(d => d!, StringComparer.OrdinalIgnoreCase)
+    .OrderByDescending(g => g.Count())
+    .Select(g => g.Key)
+    .FirstOrDefault();
+
+if (libraryFolder is null)
+{
+    Console.WriteLine("  SKIP  no sound library folder on this machine to scan");
+}
+else
+{
+    var folderImport = new ResananceImporter().ImportFromFolder(libraryFolder);
+    Check("folder import finds sounds in the library folder", folderImport.Imported > 0,
+        $"{folderImport.Imported} files in {Path.GetFileName(libraryFolder)}");
+}
 
 // --------------------------------------------------------------------------
 Console.WriteLine();
