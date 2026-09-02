@@ -1,0 +1,23 @@
+# Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+*.user
+*.suo
+.vs/
+
+# Publish output
+publish/
+dist/
+*.zip
+
+# Local machine-specific config (never commit device names or paths)
+appsettings.local.json
+*.local.json
+
+# Runtime data written by the app during dev
+sounds-dev/
+graphify-out/
