@@ -72,6 +72,16 @@ NAudio 3.0.1 notes, verified against the installed assembly on 2026-09-02, not f
   exposes `IsFormatSupported` so the endpoint can be asked what it accepts rather than
   guessed at.
 
+## Editing config.json by hand
+
+The app writes the whole config on exit, from memory. So editing
+`%APPDATA%\Patchboard\config.json` while Patchboard is running achieves nothing: the
+running instance overwrites the file when it closes and your edit vanishes. Close the app
+first, edit, then relaunch. This has already caught us once, and the symptom is confusing
+because the edit is visibly correct on disk right up until the app exits.
+
+The same mechanism means two instances fight, with the last one to close winning.
+
 ## Never touch the system volume
 
 `WasapiOut.Volume`, and `WasapiPlayer.DeviceVolume`, write the **system-wide endpoint

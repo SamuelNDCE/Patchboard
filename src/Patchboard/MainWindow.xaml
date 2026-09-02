@@ -275,8 +275,8 @@
                             <Button Style="{StaticResource ToolButton}"
                                     Command="{Binding UseCableOutputCommand}"
                                     Visibility="{Binding HasCableOutput, Converter={StaticResource BoolToVis}}"
-                                    Content="Send to Discord (CABLE)"
-                                    ToolTip="Plays into CABLE Input. Set Discord's microphone to CABLE Output to hear it." />
+                                    Content="Send to Discord"
+                                    ToolTip="{Binding VoiceRouteName, StringFormat='Routes through {0}. Check what Discord is listening on.'}" />
                         </StackPanel>
                     </Grid>
                 </Border>

@@ -75,7 +75,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ImportResananceCommand = new RelayCommand(ImportResanance);
         ImportFolderCommand = new RelayCommand(ImportFolder);
         UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
-        UseCableOutputCommand = new RelayCommand(() => EnableOutput(CableOutput));
+        UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         ColumnsUpCommand = new RelayCommand(() => GridColumns++);
@@ -328,12 +328,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string DefaultOutputName =>
         Outputs.FirstOrDefault(o => o.IsDefault)?.FriendlyName ?? "default device";
 
-    /// <summary>The endpoint that carries sound into Discord or a game as a microphone.</summary>
-    private DeviceViewModel? CableOutput =>
+    /// <summary>
+    /// The endpoint most likely to actually reach Discord or a game as a microphone.
+    ///
+    /// VoiceMeeter comes first, and that order is the whole point. Both VB-Cable and
+    /// VoiceMeeter are usually installed together, but only one of them is carrying the
+    /// user's microphone, and the other is a cable with nothing attached to its far end.
+    /// This shortcut originally offered CABLE Input unconditionally and sent Samuel to a
+    /// dead end: his VoiceMeeter reads his USB mic and routes it to B1, while nothing on
+    /// the machine reads CABLE Output at all. Where VoiceMeeter is present it is the safer
+    /// guess, because its virtual input reaches the same bus his voice already uses.
+    /// </summary>
+    private DeviceViewModel? VoiceRoute =>
         Outputs.FirstOrDefault(o =>
+            o.FriendlyName.StartsWith("Voicemeeter Input", StringComparison.OrdinalIgnoreCase))
+        ?? Outputs.FirstOrDefault(o =>
             o.FriendlyName.StartsWith("CABLE Input", StringComparison.OrdinalIgnoreCase));
 
-    public bool HasCableOutput => CableOutput is not null;
+    public bool HasCableOutput => VoiceRoute is not null;
+
+    /// <summary>Names the device on the button, so the shortcut cannot misrepresent itself.</summary>
+    public string VoiceRouteName => VoiceRoute?.FriendlyName ?? "";
 
     /// <summary>
     /// Mic passthrough is on and an output is selected, so his voice is now going wherever
@@ -349,6 +364,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasDefaultOutput));
         OnPropertyChanged(nameof(DefaultOutputName));
         OnPropertyChanged(nameof(HasCableOutput));
+        OnPropertyChanged(nameof(VoiceRouteName));
         OnPropertyChanged(nameof(MicIsLive));
     }
 
