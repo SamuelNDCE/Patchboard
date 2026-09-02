@@ -129,6 +129,7 @@
             <Grid Grid.Column="1">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -200,9 +201,50 @@
                     </Grid>
                 </Border>
 
+                <!-- Nothing ticked in the output panel. Pressing a button would be silent,
+                     and a line in the status bar was demonstrably too quiet to notice. -->
+                <Border Grid.Row="1"
+                        Background="#1A0F0F"
+                        BorderBrush="{StaticResource DangerBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="16,12"
+                        Visibility="{Binding HasNoOutput, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="No output selected, so nothing will play"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource DangerBrush}" />
+                            <TextBlock Text="Tick a device under OUTPUT on the left, or use a shortcut. You can pick several at once."
+                                       Style="{StaticResource Hint}"
+                                       Margin="0,3,0,0" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Style="{StaticResource ToolButton}"
+                                    Margin="0,0,8,0"
+                                    Command="{Binding UseDefaultOutputCommand}"
+                                    Visibility="{Binding HasDefaultOutput, Converter={StaticResource BoolToVis}}"
+                                    Content="{Binding DefaultOutputName, StringFormat='Play on {0}'}"
+                                    ToolTip="Your Windows default playback device" />
+
+                            <Button Style="{StaticResource ToolButton}"
+                                    Command="{Binding UseCableOutputCommand}"
+                                    Visibility="{Binding HasCableOutput, Converter={StaticResource BoolToVis}}"
+                                    Content="Send to Discord (CABLE)"
+                                    ToolTip="Plays into CABLE Input. Set Discord's microphone to CABLE Output to hear it." />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- Button grid -->
                 <ScrollViewer x:Name="GridScroller"
-                              Grid.Row="1"
+                              Grid.Row="2"
                               Padding="13,13,13,13"
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
@@ -289,7 +331,7 @@
                 </ScrollViewer>
 
                 <!-- Empty state, shown over the grid when there is nothing bound -->
-                <StackPanel Grid.Row="1"
+                <StackPanel Grid.Row="2"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Center"
                             IsHitTestVisible="False">
@@ -315,14 +357,39 @@
                 </StackPanel>
 
                 <!-- Status bar -->
-                <Border Grid.Row="2"
+                <Border Grid.Row="3"
                         BorderBrush="{StaticResource BorderBrush}"
                         BorderThickness="0,1,0,0"
                         Padding="16,8">
-                    <TextBlock Text="{Binding Status}"
-                               FontSize="11"
-                               Foreground="{StaticResource TextDimBrush}"
-                               TextTrimming="CharacterEllipsis" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding Status}"
+                                   FontSize="11"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+
+                        <!-- His voice is going out wherever the sounds go. If that includes
+                             his headphones he will hear himself, and if VoiceMeeter already
+                             routes the mic he goes out twice. -->
+                        <Border Grid.Column="1"
+                                Background="#14241A"
+                                BorderBrush="{StaticResource AccentBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Padding="8,3"
+                                Visibility="{Binding MicIsLive, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="MIC LIVE"
+                                       FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Foreground="{StaticResource AccentBrush}" />
+                        </Border>
+                    </Grid>
                 </Border>
             </Grid>
         </Grid>

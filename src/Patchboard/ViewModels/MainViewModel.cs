@@ -74,6 +74,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         RefreshDevicesCommand = new RelayCommand(() => { RefreshDevices(); ApplyOutputs(); ApplyMic(); });
         ImportResananceCommand = new RelayCommand(ImportResanance);
         ImportFolderCommand = new RelayCommand(ImportFolder);
+        UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
+        UseCableOutputCommand = new RelayCommand(() => EnableOutput(CableOutput));
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         ColumnsUpCommand = new RelayCommand(() => GridColumns++);
@@ -123,6 +125,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand RefreshDevicesCommand { get; }
     public RelayCommand ImportResananceCommand { get; }
     public RelayCommand ImportFolderCommand { get; }
+    public RelayCommand UseDefaultOutputCommand { get; }
+    public RelayCommand UseCableOutputCommand { get; }
     public RelayCommand ToggleSettingsCommand { get; }
     public RelayCommand ClearSearchCommand { get; }
     public RelayCommand ColumnsUpCommand { get; }
@@ -206,6 +210,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _config.MicPassthroughEnabled = value;
             OnPropertyChanged();
             ApplyMic();
+            NotifyOutputState();
             Save();
         }
     }
@@ -295,12 +300,62 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void OnInputChanged(DeviceViewModel vm)
     {
         ApplyMic();
+        NotifyOutputState();
         Save();
+    }
+
+    /// <summary>Tick one output on the user's behalf, from the banner's shortcut buttons.</summary>
+    private void EnableOutput(DeviceViewModel? device)
+    {
+        if (device is null) return;
+
+        // Setting IsEnabled runs the normal path: it updates the saved reference, reopens
+        // the streams and persists, exactly as if the checkbox had been clicked.
+        device.IsEnabled = true;
+    }
+
+    /// <summary>
+    /// Nothing is ticked in the output panel, so pressing a button does nothing at all.
+    ///
+    /// This is the single most likely way for the app to look broken, and it happened on
+    /// first use: the input section was filled in and the output section left empty, so
+    /// every press was silent. A line in the status bar was not enough, hence the banner.
+    /// </summary>
+    public bool HasNoOutput => Outputs.All(o => !o.IsEnabled);
+
+    public bool HasDefaultOutput => Outputs.Any(o => o.IsDefault);
+
+    public string DefaultOutputName =>
+        Outputs.FirstOrDefault(o => o.IsDefault)?.FriendlyName ?? "default device";
+
+    /// <summary>The endpoint that carries sound into Discord or a game as a microphone.</summary>
+    private DeviceViewModel? CableOutput =>
+        Outputs.FirstOrDefault(o =>
+            o.FriendlyName.StartsWith("CABLE Input", StringComparison.OrdinalIgnoreCase));
+
+    public bool HasCableOutput => CableOutput is not null;
+
+    /// <summary>
+    /// Mic passthrough is on and an output is selected, so his voice is now going wherever
+    /// the sounds go. Worth saying out loud, because if that output is his headphones he
+    /// will hear himself, and if VoiceMeeter is already routing the mic he goes out twice.
+    /// </summary>
+    public bool MicIsLive => _config.MicPassthroughEnabled && !HasNoOutput
+                             && _config.InputDevices.Any(i => i.Enabled);
+
+    private void NotifyOutputState()
+    {
+        OnPropertyChanged(nameof(HasNoOutput));
+        OnPropertyChanged(nameof(HasDefaultOutput));
+        OnPropertyChanged(nameof(DefaultOutputName));
+        OnPropertyChanged(nameof(HasCableOutput));
+        OnPropertyChanged(nameof(MicIsLive));
     }
 
     private void ApplyOutputs()
     {
         _engine.SetOutputs(_config.OutputDevices, _config.LatencyMs);
+        NotifyOutputState();
 
         var enabled = _config.OutputDevices.Count(o => o.Enabled);
         if (enabled == 0)
