@@ -108,11 +108,33 @@ gone.
 
 ## Verify before claiming it works
 
-1. `dotnet build src/Patchboard/Patchboard.csproj` exits 0 with no warnings.
-2. Device enumeration lists real endpoints, checked against
-   `Get-PnpDevice -Class AudioEndpoint -Status OK`.
-3. The app launches and the window renders. Screenshot it.
-4. Sound playback is verified BY SAMUEL, not by us. See the hard rules.
+Run the checks. Close Patchboard first, because a running app locks its own exe and the
+build fails with MSB3027.
+
+    dotnet run --project tests/Patchboard.Checks
+
+44 checks covering config, decoding his real files, the whole playback chain in memory,
+device enumeration and resolution, live WASAPI output, mic capture, hotkey parsing, and
+both import paths. It prints PASSED and FAILED counts and exits after reporting.
+
+Two rules the checks themselves obey, and any addition to them must too:
+
+- **They only ever open "Steam Streaming Speakers" for output**, an endpoint that is inert
+  because Steam is not running. Never a device Samuel or his Discord call can hear.
+- **They never open his real microphone.** The mic path is tested against "CABLE Output",
+  the capture side of the virtual cable, which delivers silence unless something is
+  playing into CABLE Input. Opening the eMeet or the USB mic would be recording him.
+
+A test that measures silence proves nothing. The playback checks deliberately pick the
+decoded clip with the loudest opening second, because the first attempt used "arana"
+(Aria Math), which fades in from silence, and three checks failed for that reason alone
+while the code was correct.
+
+What the checks cannot cover, and is therefore Samuel's to confirm: that a sound is
+audible on the devices HE selects, and anything behind a mouse click (rename dialog,
+drag to reorder, the context menu).
+
+    dotnet build src/Patchboard/Patchboard.csproj    # must exit 0 with no warnings
 
 ## Where things are
 

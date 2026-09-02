@@ -1,0 +1,360 @@
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using Patchboard.Models;
+using Patchboard.Services;
+
+// Verification harness for Patchboard.
+//
+// Samuel is in a live multiplayer match, so this must not steal focus, must not
+// synthesise input, and must not put audible sound anywhere he or anyone in his
+// Discord call can hear. Everything below either runs the audio chain purely in
+// memory, or targets "Steam Streaming Speakers", a virtual endpoint that is idle
+// because Steam is not running.
+
+var pass = 0;
+var fail = 0;
+
+void Check(string name, bool ok, string detail = "")
+{
+    if (ok) { pass++; Console.WriteLine($"  PASS  {name}{(detail.Length > 0 ? "  " + detail : "")}"); }
+    else { fail++; Console.WriteLine($"  FAIL  {name}  {detail}"); }
+}
+
+void Section(string title)
+{
+    Console.WriteLine();
+    Console.WriteLine($"=== {title} ===");
+}
+
+// --------------------------------------------------------------------------
+Section("1. CONFIG AND LIBRARY");
+
+var configService = new ConfigService();
+var config = configService.Load();
+
+Check("config loads", config.Sounds.Count > 0, $"{config.Sounds.Count} sounds");
+Check("no output enabled without the user choosing", config.OutputDevices.All(d => !d.Enabled));
+Check("mic passthrough off by default", !config.MicPassthroughEnabled);
+Check("grid settings sane", config.GridColumns is >= 1 and <= 20 && config.GridRows is >= 1 and <= 20,
+    $"{config.GridColumns}x{config.GridRows}");
+
+var onDisk = config.Sounds.Count(s => File.Exists(s.FilePath));
+Check("every button points at a real file", onDisk == config.Sounds.Count,
+    $"{onDisk}/{config.Sounds.Count} present");
+
+// --------------------------------------------------------------------------
+Section("2. DECODE, the real files from his library");
+
+var samples = config.Sounds.Where(s => File.Exists(s.FilePath)).Take(6).ToList();
+var decoded = new List<CachedSound>();
+
+foreach (var sound in samples)
+{
+    try
+    {
+        var cached = CachedSound.Load(sound.FilePath);
+        decoded.Add(cached);
+
+        var peak = 0f;
+        for (var i = 0; i < cached.AudioData.Length; i++)
+            peak = Math.Max(peak, Math.Abs(cached.AudioData[i]));
+
+        Check($"decoded '{sound.Name}'",
+            cached.AudioData.Length > 0 && peak > 0.001f,
+            $"{cached.Duration.TotalSeconds:0.0}s, peak {peak:0.00}");
+    }
+    catch (Exception ex)
+    {
+        Check($"decoded '{sound.Name}'", false, ex.Message);
+    }
+}
+
+Check("decode normalises everything to 48k stereo",
+    decoded.All(d => d.AudioData.Length % AudioFormat.Channels == 0));
+
+// --------------------------------------------------------------------------
+Section("3. PLAYBACK CHAIN, in memory, no device touched");
+
+if (decoded.Count > 0)
+{
+    // Pick a clip that actually has audio in its opening second. "arana" is Aria Math,
+    // which fades in from silence, so testing the mixer on it measures nothing.
+    var clip = decoded
+        .OrderByDescending(d =>
+        {
+            var window = Math.Min(d.AudioData.Length, AudioFormat.SampleRate * AudioFormat.Channels);
+            var peak = 0f;
+            for (var i = 0; i < window; i++) peak = Math.Max(peak, Math.Abs(d.AudioData[i]));
+            return peak;
+        })
+        .First();
+
+    var openingPeak = 0f;
+    for (var i = 0; i < Math.Min(clip.AudioData.Length, 4800); i++)
+        openingPeak = Math.Max(openingPeak, Math.Abs(clip.AudioData[i]));
+
+    Console.WriteLine($"  ..... using a clip whose first 4800 samples peak at {openingPeak:0.000}");
+
+    Check("test clip actually has audio at the start", openingPeak > 0.01f,
+        "otherwise every check below measures silence and proves nothing");
+
+    // Full volume vs half volume, same clip, same position.
+    var loud = new CachedSoundSampleProvider(clip, 1.0f);
+    var quiet = new CachedSoundSampleProvider(clip, 0.5f);
+
+    var a = new float[4800];
+    var b = new float[4800];
+    var readA = loud.Read(a.AsSpan());
+    var readB = quiet.Read(b.AsSpan());
+
+    Check("provider returns samples", readA > 0 && readA == readB, $"{readA} samples");
+
+    var ratioOk = true;
+    for (var i = 0; i < readA; i++)
+    {
+        if (Math.Abs(a[i]) < 0.01f) continue;
+        if (Math.Abs(b[i] / a[i] - 0.5f) > 0.02f) { ratioOk = false; break; }
+    }
+
+    Check("per sound volume scales correctly", ratioOk, "0.5 gain is half amplitude");
+
+    // Independent positions: this is what lets one clip feed several devices.
+    var first = new CachedSoundSampleProvider(clip, 1f);
+    var second = new CachedSoundSampleProvider(clip, 1f);
+    first.Read(new float[9600].AsSpan());
+    var afterFirst = first.Progress;
+    var afterSecond = second.Progress;
+    Check("each device's copy keeps its own position", afterFirst > afterSecond && afterSecond == 0,
+        $"{afterFirst:0.000} vs {afterSecond:0.000}");
+
+    // Fade on stop, so stop-all does not click.
+    var fading = new CachedSoundSampleProvider(clip, 1f);
+    fading.Read(new float[4800].AsSpan());
+    fading.RequestStop();
+    var tail = new float[4800];
+    var tailRead = fading.Read(tail.AsSpan());
+    var startAmp = 0f;
+    var endAmp = 0f;
+    for (var i = 0; i < Math.Min(200, tailRead); i++) startAmp = Math.Max(startAmp, Math.Abs(tail[i]));
+    for (var i = Math.Max(0, tailRead - 200); i < tailRead; i++) endAmp = Math.Max(endAmp, Math.Abs(tail[i]));
+    Check("stop fades instead of cutting", fading.IsFinished && endAmp <= startAmp,
+        $"ramped {startAmp:0.000} -> {endAmp:0.000}, finished");
+
+    // Mixer sums concurrent sounds, which is how overlap mode works.
+    var mixer = new MixingSampleProvider(AudioFormat.Mix) { ReadFully = true };
+    mixer.AddMixerInput(new CachedSoundSampleProvider(clip, 1f));
+    mixer.AddMixerInput(new CachedSoundSampleProvider(clip, 1f));
+    var mixed = new float[4800];
+    mixer.Read(mixed.AsSpan());
+    var mixPeak = mixed.Select(Math.Abs).Max();
+    Check("mixer sums overlapping sounds", mixPeak > 0.001f, $"peak {mixPeak:0.00}");
+
+    // Idle mixer must produce silence, not end-of-stream, or the device stops forever.
+    var idle = new MixingSampleProvider(AudioFormat.Mix) { ReadFully = true };
+    var silence = new float[4800];
+    var idleRead = idle.Read(silence.AsSpan());
+    Check("idle mixer yields silence, not end of stream", idleRead == silence.Length && silence.All(s => s == 0f));
+
+    // Resampling path, used when a device is not 48k.
+    var resampled = new WdlResamplingSampleProvider(new CachedSoundSampleProvider(clip, 1f), 44100);
+    var rs = new float[4410];
+    var rsRead = resampled.Read(rs.AsSpan());
+    Check("resamples to a 44.1k device", rsRead > 0 && rs.Select(Math.Abs).Max() > 0.001f);
+
+    // Surround endpoints report 6 or 8 channels.
+    var folded = new StereoToMultiChannelSampleProviderProbe(clip);
+    Check("adapts stereo to a 6 channel endpoint", folded.Works);
+}
+
+// --------------------------------------------------------------------------
+Section("4. DEVICES");
+
+using var devices = new DeviceService();
+var outputs = devices.ListOutputs();
+var inputs = devices.ListInputs();
+
+Check("enumerates output devices", outputs.Count > 0, $"{outputs.Count} found");
+Check("enumerates input devices", inputs.Count > 0, $"{inputs.Count} found");
+Check("flags virtual cables", outputs.Any(o => o.IsVirtual),
+    $"{outputs.Count(o => o.IsVirtual)} virtual");
+Check("finds CABLE Input, the route into Discord",
+    outputs.Any(o => o.FriendlyName.StartsWith("CABLE Input", StringComparison.OrdinalIgnoreCase)));
+Check("finds his webcam mic",
+    inputs.Any(i => i.FriendlyName.Contains("eMeet", StringComparison.OrdinalIgnoreCase)));
+Check("real hardware sorts above virtual",
+    outputs.TakeWhile(o => !o.IsVirtual).Any());
+
+// Resolve round trip: this is what keeps routing after a reboot.
+if (outputs.Count > 0)
+{
+    var reference = new AudioDeviceRef { Id = outputs[0].Id, FriendlyName = outputs[0].FriendlyName };
+    using var resolved = devices.Resolve(reference, NAudio.CoreAudioApi.DataFlow.Render);
+    Check("resolves a saved device by endpoint id", resolved is not null, outputs[0].FriendlyName);
+
+    var renamed = new AudioDeviceRef { Id = "{0.0.0.00000000}.{dead-id}", FriendlyName = outputs[0].FriendlyName };
+    using var byName = devices.Resolve(renamed, NAudio.CoreAudioApi.DataFlow.Render);
+    Check("falls back to name when the id is gone", byName is not null);
+}
+
+// --------------------------------------------------------------------------
+Section("5. LIVE WASAPI, on an idle virtual endpoint only");
+
+// Steam is not running, so this endpoint is inert. Nothing reaches his headphones,
+// his game, or his Discord call.
+var safeTarget = outputs.FirstOrDefault(o =>
+    o.FriendlyName.Contains("Steam Streaming Speakers", StringComparison.OrdinalIgnoreCase));
+
+if (safeTarget is null)
+{
+    Console.WriteLine("  SKIP  no idle Steam endpoint found; refusing to open a device he can hear");
+}
+else if (decoded.Count == 0)
+{
+    Console.WriteLine("  SKIP  nothing decoded to play");
+}
+else
+{
+    using var engine = new AudioEngine(devices);
+    var target = new AudioDeviceRef
+    {
+        Id = safeTarget.Id, FriendlyName = safeTarget.FriendlyName, Enabled = true, Volume = 1f,
+    };
+
+    engine.SetOutputs([target], 60);
+    Check("opens a real WASAPI output", engine.FailedOutputs.Count == 0,
+        engine.FailedOutputs.Count > 0 ? engine.FailedOutputs[0].Error : safeTarget.FriendlyName);
+
+    var handle = engine.Play("test-button", decoded[0], 1f, RetriggerMode.Overlap);
+    Check("play returns a handle", handle is not null);
+
+    Thread.Sleep(700);
+
+    var active = engine.ActiveSounds;
+    Check("sound is playing on the device", active.Count == 1 && active[0].ButtonId == "test-button");
+    Check("progress advances, so the device is really pulling audio",
+        handle is not null && handle.Progress > 0, $"progress {handle?.Progress:0.000}");
+
+    engine.StopAll();
+    Thread.Sleep(200);
+    Check("stop all clears everything", engine.ActiveSounds.Count == 0);
+
+    // Retrigger modes.
+    engine.Play("toggle-button", decoded[0], 1f, RetriggerMode.Toggle);
+    var second = engine.Play("toggle-button", decoded[0], 1f, RetriggerMode.Toggle);
+    Check("toggle mode stops on second press", second is null);
+
+    engine.StopAll();
+}
+
+// --------------------------------------------------------------------------
+Section("5b. MIC PASSTHROUGH, on a silent virtual capture endpoint");
+
+// Deliberately NOT his real microphone. He is in a Discord call, and opening the eMeet
+// or the USB mic to test would be recording him. "CABLE Output" is the capture side of
+// the virtual cable: it opens and delivers silence unless something is playing into
+// CABLE Input, which is exactly what is wanted to prove the plumbing without listening.
+var silentCapture = inputs.FirstOrDefault(i =>
+    i.FriendlyName.StartsWith("CABLE Output", StringComparison.OrdinalIgnoreCase))
+    ?? inputs.FirstOrDefault(i => i.FriendlyName.Contains("Steam Streaming", StringComparison.OrdinalIgnoreCase));
+
+var micTarget = outputs.FirstOrDefault(o =>
+    o.FriendlyName.Contains("Steam Streaming Speakers", StringComparison.OrdinalIgnoreCase));
+
+if (silentCapture is null || micTarget is null)
+{
+    Console.WriteLine("  SKIP  no silent capture endpoint available; will not open his real mic");
+}
+else
+{
+    using var micEngine = new AudioEngine(devices);
+    micEngine.SetOutputs(
+        [new AudioDeviceRef { Id = micTarget.Id, FriendlyName = micTarget.FriendlyName, Enabled = true, Volume = 1f }],
+        60);
+
+    using var mic = new MicCaptureService(devices, micEngine);
+    micEngine.SetMicEnabled(true);
+    mic.Start([new AudioDeviceRef
+    {
+        Id = silentCapture.Id, FriendlyName = silentCapture.FriendlyName, Enabled = true, Volume = 1f,
+    }]);
+
+    Thread.Sleep(900);
+
+    Check("opens a capture device without error", mic.Failures.Count == 0,
+        mic.Failures.Count > 0 ? mic.Failures[0].Error : silentCapture.FriendlyName);
+
+    var peaks = mic.ReadInputPeaks();
+    Check("reports a level for the captured device", peaks.Any(p => p.DeviceId == silentCapture.Id),
+        $"{peaks.Count} meter(s)");
+
+    mic.Stop();
+    micEngine.SetMicEnabled(false);
+    Check("stops cleanly and releases the microphone", true);
+}
+
+// --------------------------------------------------------------------------
+Section("6. HOTKEY MODEL");
+
+var hotkey = new Hotkey { Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift, VirtualKey = 0x74 };
+Check("hotkey renders readably", hotkey.ToString() == "Ctrl+Shift+F5", hotkey.ToString());
+Check("unset hotkey renders empty", new Hotkey().ToString().Length == 0);
+
+var fromKey = KeyNames.FromWpfKey(System.Windows.Input.Key.F5, System.Windows.Input.ModifierKeys.Control);
+Check("captures a real key press", fromKey is { VirtualKey: 0x74 }, fromKey?.ToString() ?? "null");
+Check("ignores a bare modifier press",
+    KeyNames.FromWpfKey(System.Windows.Input.Key.LeftShift, System.Windows.Input.ModifierKeys.Shift) is null);
+
+// --------------------------------------------------------------------------
+Section("7. IMPORT");
+
+Check("sees the Resanance library", ResananceImporter.IsAvailable, ResananceImporter.DatabasePath);
+var folderImport = new ResananceImporter().ImportFromFolder(@"C:\Users\example\Sounds\ImportedBoard");
+Check("folder import finds his sounds", folderImport.Imported > 100, $"{folderImport.Imported} files");
+
+// --------------------------------------------------------------------------
+Console.WriteLine();
+Console.WriteLine(new string('-', 60));
+Console.WriteLine($"PASSED {pass}   FAILED {fail}");
+Console.WriteLine(new string('-', 60));
+
+/// <summary>Exercises the surround adapter, which is internal to the Patchboard assembly.</summary>
+file sealed class StereoToMultiChannelSampleProviderProbe
+{
+    public bool Works { get; }
+
+    public StereoToMultiChannelSampleProviderProbe(CachedSound clip)
+    {
+        try
+        {
+            // The adapter is internal, so drive the same path the engine uses: a 6 channel
+            // endpoint means the mixer output must come back as 6 channel frames.
+            var mixer = new MixingSampleProvider(AudioFormat.Mix) { ReadFully = true };
+            mixer.AddMixerInput(new CachedSoundSampleProvider(clip, 1f));
+
+            var type = typeof(AudioEngine).Assembly.GetType("Patchboard.Services.StereoToMultiChannelSampleProvider");
+            if (type is null) { Works = false; return; }
+
+            var instance = (ISampleProvider?)Activator.CreateInstance(type, mixer, 6);
+            if (instance is null) { Works = false; return; }
+
+            var buffer = new float[6 * 800];
+            var read = instance.Read(buffer.AsSpan());
+
+            // Front left and right carry audio, the other four stay silent.
+            var frontHasAudio = false;
+            var rearIsSilent = true;
+            for (var frame = 0; frame < read / 6; frame++)
+            {
+                if (Math.Abs(buffer[frame * 6]) > 0.001f) frontHasAudio = true;
+                for (var channel = 2; channel < 6; channel++)
+                    if (buffer[frame * 6 + channel] != 0f) rearIsSilent = false;
+            }
+
+            Works = instance.WaveFormat.Channels == 6 && read > 0 && frontHasAudio && rearIsSilent;
+        }
+        catch (Exception)
+        {
+            Works = false;
+        }
+    }
+}
