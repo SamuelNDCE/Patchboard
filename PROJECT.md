@@ -23,6 +23,21 @@ Config is plain JSON on disk. Audio goes straight to WASAPI.
   Never write back, never delete. He may still want to use Resanance.
 - **Do not store absolute machine paths in tracked files.** Sound file paths live in
   the user's own config under `%APPDATA%\Patchboard\config.json`, which is not tracked.
+- **Never synthesise mouse or keyboard input, and never call SetForegroundWindow, on
+  this machine.** Set 2026-09-02 after a `mouse_event` right click intended for a
+  Patchboard tile landed in Samuel's live multiplayer match, because he was playing
+  fullscreen at the time and the click went to the game. Verifying a GUI tempts exactly
+  this, so the rule is absolute rather than conditional on whether a game looks like it
+  is running: you cannot see what is fullscreen from a tool call.
+
+  What is still allowed: launching the app, `GetWindowRect` plus `CopyFromScreen` to
+  capture **only the app's own window rectangle**, and read-only UI Automation queries
+  scoped to the Patchboard process. What is not: `InvokePattern.Invoke`, `TogglePattern`,
+  `mouse_event`, `SendKeys`, `SetCursorPos`, `SetForegroundWindow`, and full-screen
+  capture, which photographs whatever he is actually doing.
+
+  Anything needing a real click is Samuel's to test. Say so plainly rather than reaching
+  for automation.
 
 ## Audio architecture, and why
 
