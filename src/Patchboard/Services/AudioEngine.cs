@@ -50,6 +50,12 @@ public sealed class PlayingSound
 
     public float SoundVolume { get; }
 
+    /// <summary>
+    /// How many output devices this sound is playing on. Public so a caller can tell a
+    /// normal press, which reaches every device, from a preview, which reaches exactly one.
+    /// </summary>
+    public int DeviceCount => Instances.Count;
+
     /// <summary>True once every device's copy has finished or faded out.</summary>
     public bool IsFinished => Instances.All(i => i.Provider.IsFinished);
 
@@ -261,7 +267,16 @@ public sealed class AudioEngine : IDisposable
     /// because a toggle press stopped it. The caller reports that rather than letting a
     /// dead press look like it worked.
     /// </summary>
-    public PlayingSound? Play(string buttonId, CachedSound sound, float soundVolume, RetriggerMode retrigger)
+    /// <param name="onlyDeviceId">
+    /// When given, the sound plays to that one device and no other. This is how previewing
+    /// to your own headphones works without the sound also going out to Discord.
+    /// </param>
+    public PlayingSound? Play(
+        string buttonId,
+        CachedSound sound,
+        float soundVolume,
+        RetriggerMode retrigger,
+        string? onlyDeviceId = null)
     {
         lock (Gate)
         {
@@ -281,10 +296,14 @@ public sealed class AudioEngine : IDisposable
                     break;
             }
 
-            if (_channels.Count == 0) return null;
+            var targets = onlyDeviceId is null
+                ? _channels
+                : _channels.Where(c => c.DeviceId == onlyDeviceId).ToList();
+
+            if (targets.Count == 0) return null;
 
             var handle = new PlayingSound(buttonId, Math.Clamp(soundVolume, 0f, 1f));
-            foreach (var channel in _channels)
+            foreach (var channel in targets)
             {
                 var provider = new CachedSoundSampleProvider(
                     sound, handle.SoundVolume * channel.Volume * _masterVolume);

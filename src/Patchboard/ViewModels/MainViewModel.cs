@@ -39,6 +39,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _renameText = "";
     private string _renameSubject = "";
     private SoundButtonViewModel? _renameTarget;
+    private bool _isEditingVolume;
+    private string _volumeSubject = "";
+    private SoundButtonViewModel? _volumeTarget;
 
     public MainViewModel()
     {
@@ -77,6 +80,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
         UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
         MuteMicCommand = new RelayCommand(MuteMic);
+        PreviewCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PreviewInHeadphones(vm); });
+        AdjustVolumeCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginVolume(vm); });
+        CloseVolumeCommand = new RelayCommand(CloseVolume);
+        PreviewVolumeCommand = new RelayCommand(() => { if (_volumeTarget is not null) PreviewInHeadphones(_volumeTarget); });
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         ColumnsUpCommand = new RelayCommand(() => GridColumns++);
@@ -129,6 +136,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand UseDefaultOutputCommand { get; }
     public RelayCommand UseCableOutputCommand { get; }
     public RelayCommand MuteMicCommand { get; }
+    public RelayCommand PreviewCommand { get; }
+    public RelayCommand AdjustVolumeCommand { get; }
+    public RelayCommand CloseVolumeCommand { get; }
+    public RelayCommand PreviewVolumeCommand { get; }
     public RelayCommand ToggleSettingsCommand { get; }
     public RelayCommand ClearSearchCommand { get; }
     public RelayCommand ColumnsUpCommand { get; }
@@ -231,6 +242,29 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    // ---- Window placement ---------------------------------------------------------
+
+    /// <summary>Size and position to restore on launch. NaN position means never placed.</summary>
+    public (double Width, double Height, double Left, double Top, bool Maximized) WindowPlacement =>
+        (_config.WindowWidth, _config.WindowHeight, _config.WindowLeft, _config.WindowTop, _config.WindowMaximized);
+
+    /// <summary>
+    /// Remember where the window was. Saved on close rather than on every move, because a
+    /// drag would otherwise rewrite the whole config file on every mouse tick.
+    /// </summary>
+    public void SaveWindowPlacement(double width, double height, double left, double top, bool maximized)
+    {
+        // Ignore a collapsed or off-screen result, which is what you get if the window was
+        // minimised at the moment of closing. Restoring that would open it invisible.
+        if (!maximized && (width < 200 || height < 200)) return;
+
+        _config.WindowWidth = width;
+        _config.WindowHeight = height;
+        _config.WindowLeft = left;
+        _config.WindowTop = top;
+        _config.WindowMaximized = maximized;
+    }
+
     /// <summary>Called from the window once it has a handle.</summary>
     public void AttachWindow(System.Windows.Window window)
     {
@@ -248,7 +282,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void RefreshDevices()
     {
         Merge(Outputs, _deviceService.ListOutputs(), _config.OutputDevices, OnOutputChanged, isOutput: true);
-        foreach (var output in Outputs) output.MicRoutingChanged += OnMicRoutingChanged;
+        foreach (var output in Outputs)
+        {
+            output.MicRoutingChanged += OnMicRoutingChanged;
+            output.MonitorChanged += OnMonitorChanged;
+        }
         Merge(Inputs, _deviceService.ListInputs(), _config.InputDevices, OnInputChanged, isOutput: false);
     }
 
@@ -306,6 +344,120 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ApplyMic();
         NotifyOutputState();
         Save();
+    }
+
+    /// <summary>
+    /// One device at a time is "my headphones". Marking a new one clears the old, and the
+    /// device is switched on if it was not already: a preview plays through an existing
+    /// stream, so an unticked monitor would silently do nothing.
+    /// </summary>
+    private void OnMonitorChanged(DeviceViewModel vm)
+    {
+        if (vm.IsMonitor)
+        {
+            foreach (var other in Outputs.Where(o => !ReferenceEquals(o, vm))) other.ClearMonitorQuietly();
+            if (!vm.IsEnabled) vm.IsEnabled = true;
+        }
+
+        OnPropertyChanged(nameof(HasMonitor));
+        OnPropertyChanged(nameof(MonitorName));
+        Save();
+    }
+
+    /// <summary>The device previews play to, when one has been marked.</summary>
+    public DeviceViewModel? Monitor => Outputs.FirstOrDefault(o => o.IsMonitor && o.IsEnabled);
+
+    public bool HasMonitor => Monitor is not null;
+
+    public string MonitorName => Monitor?.FriendlyName ?? "";
+
+    /// <summary>
+    /// Play a sound to the monitor device only, so it can be checked without everyone in
+    /// Discord hearing it.
+    /// </summary>
+    public void PreviewInHeadphones(SoundButtonViewModel vm)
+    {
+        var monitor = Monitor;
+        if (monitor is null)
+        {
+            // Distinguish "never chose one" from "chose one and then switched it off",
+            // because the fix is different and the second reads as a bug otherwise.
+            var markedButOff = Outputs.FirstOrDefault(o => o.IsMonitor && !o.IsEnabled);
+
+            Status = markedButOff is not null
+                ? $"{markedButOff.FriendlyName} is set as your headphones but is switched off. Tick it under OUTPUT."
+                : "No headphones set. Tick a device under OUTPUT, then tick 'these are my headphones' under it.";
+            return;
+        }
+
+        CachedSound sound;
+        try
+        {
+            sound = GetOrLoad(vm.Model.FilePath);
+        }
+        catch (Exception ex)
+        {
+            vm.FileMissing = true;
+            Status = ex.Message;
+            return;
+        }
+
+        vm.FileMissing = false;
+
+        // Always Restart for a preview. Stacking copies of the same clip while auditioning
+        // it is never what someone wants.
+        _engine.Play(vm.Id, sound, vm.Model.Volume, RetriggerMode.Restart, monitor.Id);
+        Status = $"Previewing {vm.DisplayName} in {monitor.FriendlyName} only.";
+    }
+
+    // ---- Per sound volume ---------------------------------------------------------
+
+    public bool IsEditingVolume
+    {
+        get => _isEditingVolume;
+        private set => Set(ref _isEditingVolume, value);
+    }
+
+    public string VolumeSubject
+    {
+        get => _volumeSubject;
+        private set => Set(ref _volumeSubject, value);
+    }
+
+    /// <summary>
+    /// The volume of the sound being edited, 0 to 1. Applied to the model as the slider
+    /// moves so a preview plays at the level being chosen rather than the old one.
+    /// </summary>
+    public float EditingVolume
+    {
+        get => _volumeTarget?.Model.Volume ?? 1f;
+        set
+        {
+            if (_volumeTarget is null) return;
+            var clamped = Math.Clamp(value, 0f, 1f);
+            if (Math.Abs(_volumeTarget.Model.Volume - clamped) < 0.0001f) return;
+            _volumeTarget.Model.Volume = clamped;
+            OnPropertyChanged();
+        }
+    }
+
+    private void BeginVolume(SoundButtonViewModel vm)
+    {
+        _volumeTarget = vm;
+        VolumeSubject = vm.DisplayName;
+        OnPropertyChanged(nameof(EditingVolume));
+        IsEditingVolume = true;
+    }
+
+    private void CloseVolume()
+    {
+        IsEditingVolume = false;
+        var target = _volumeTarget;
+        _volumeTarget = null;
+        if (target is null) return;
+
+        Save();
+        Status = $"{target.DisplayName} set to {target.Model.Volume * 100:0}%.";
     }
 
     private void OnMicRoutingChanged(DeviceViewModel vm)

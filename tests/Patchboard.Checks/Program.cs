@@ -354,6 +354,89 @@ else
 }
 
 // --------------------------------------------------------------------------
+Section("5d. PREVIEW TO ONE DEVICE, and settings that must persist");
+
+if (micSafeTarget is null || decoded.Count == 0)
+{
+    Console.WriteLine("  SKIP  no idle endpoint to preview against");
+}
+else
+{
+    using var previewEngine = new AudioEngine(devices);
+
+    // Two outputs open. A preview must reach exactly one of them.
+    var second = outputs.FirstOrDefault(o =>
+        o.Id != micSafeTarget.Id
+        && o.FriendlyName.Contains("Steam Streaming Microphone", StringComparison.OrdinalIgnoreCase));
+
+    var refs = new List<AudioDeviceRef>
+    {
+        new() { Id = micSafeTarget.Id, FriendlyName = micSafeTarget.FriendlyName, Enabled = true, Volume = 1f },
+    };
+
+    if (second is not null)
+        refs.Add(new AudioDeviceRef { Id = second.Id, FriendlyName = second.FriendlyName, Enabled = true, Volume = 1f });
+
+    previewEngine.SetOutputs(refs, 60);
+
+    var broadcast = previewEngine.Play("b", decoded[0], 1f, RetriggerMode.Overlap);
+    Check("a normal press reaches every open device",
+        broadcast is not null && broadcast.DeviceCount == refs.Count,
+        $"{broadcast?.DeviceCount} of {refs.Count}");
+    previewEngine.StopAll();
+
+    var preview = previewEngine.Play("p", decoded[0], 1f, RetriggerMode.Restart, micSafeTarget.Id);
+    Check("a preview reaches only the chosen device",
+        preview is not null && preview.DeviceCount == 1,
+        "this is what keeps a preview out of Discord");
+    previewEngine.StopAll();
+
+    var nowhere = previewEngine.Play("x", decoded[0], 1f, RetriggerMode.Overlap, "{not-a-real-device-id}");
+    Check("previewing to a device that is not open plays nothing", nowhere is null,
+        "silently playing everywhere instead would be the dangerous failure");
+}
+
+// Round trip every setting the user can change, through a real save and load.
+var roundTripPath = Path.Combine(ConfigService.ConfigDirectory, "config.json");
+var before = File.Exists(roundTripPath) ? File.ReadAllText(roundTripPath) : null;
+
+try
+{
+    var probe = new ConfigService().Load();
+    probe.GridColumns = 11;
+    probe.GridRows = 5;
+    probe.MasterVolume = 0.42f;
+    probe.LatencyMs = 90;
+    probe.WindowWidth = 1111;
+    probe.WindowHeight = 666;
+    probe.WindowLeft = 42;
+    probe.WindowTop = 24;
+    if (probe.Sounds.Count > 0) probe.Sounds[0].Volume = 0.33f;
+    if (probe.OutputDevices.Count > 0) probe.OutputDevices[0].IsMonitor = true;
+
+    new ConfigService().Save(probe);
+    var reloaded = new ConfigService().Load();
+
+    Check("grid size persists", reloaded.GridColumns == 11 && reloaded.GridRows == 5);
+    Check("master volume persists", Math.Abs(reloaded.MasterVolume - 0.42f) < 0.001f);
+    Check("audio buffer persists", reloaded.LatencyMs == 90);
+    Check("window size and position persist",
+        reloaded is { WindowWidth: 1111, WindowHeight: 666, WindowLeft: 42, WindowTop: 24 });
+    Check("per sound volume persists",
+        reloaded.Sounds.Count == 0 || Math.Abs(reloaded.Sounds[0].Volume - 0.33f) < 0.001f);
+    Check("the headphones device persists",
+        reloaded.OutputDevices.Count == 0 || reloaded.OutputDevices[0].IsMonitor);
+}
+finally
+{
+    // Never leave his real settings mangled by a test.
+    if (before is not null) File.WriteAllText(roundTripPath, before);
+}
+
+Check("his own config was restored after the round trip",
+    before is null || File.ReadAllText(roundTripPath) == before);
+
+// --------------------------------------------------------------------------
 Section("6. HOTKEY MODEL");
 
 var hotkey = new Hotkey { Modifiers = HotkeyModifiers.Control | HotkeyModifiers.Shift, VirtualKey = 0x74 };

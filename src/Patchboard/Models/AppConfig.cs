@@ -39,4 +39,17 @@ public sealed class AppConfig
 
     /// <summary>WASAPI shared-mode buffer in milliseconds. Lower is snappier, riskier.</summary>
     public int LatencyMs { get; set; } = 60;
+
+    // Window placement. Restored on launch so the app comes back where it was left,
+    // which matters here because it lives on a second monitor.
+    public double WindowWidth { get; set; } = 1240;
+
+    public double WindowHeight { get; set; } = 780;
+
+    /// <summary>NaN means "never positioned", so let Windows choose.</summary>
+    public double WindowLeft { get; set; } = double.NaN;
+
+    public double WindowTop { get; set; } = double.NaN;
+
+    public bool WindowMaximized { get; set; }
 }

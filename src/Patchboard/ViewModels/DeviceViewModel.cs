@@ -17,6 +17,7 @@ public sealed class DeviceViewModel : ObservableObject
     private float _volume = 1f;
     private float _peak;
     private bool _receivesMic;
+    private bool _isMonitor;
 
     public DeviceViewModel(AudioDeviceInfo? info, AudioDeviceRef reference)
     {
@@ -25,6 +26,7 @@ public sealed class DeviceViewModel : ObservableObject
         _isEnabled = reference.Enabled;
         _volume = reference.Volume;
         _receivesMic = reference.ReceivesMic;
+        _isMonitor = reference.IsMonitor;
     }
 
     /// <summary>True for a playback device. Only outputs can be sent the microphone.</summary>
@@ -135,6 +137,33 @@ public sealed class DeviceViewModel : ObservableObject
     };
 
     public bool HasFeedbackRisk => FeedbackRisk is not null;
+
+    /// <summary>
+    /// This device is the user's own headphones. Right clicking a sound and choosing
+    /// "Play in my headphones" sends it here alone, so it can be checked without going
+    /// out to Discord. Only one device holds this at a time.
+    /// </summary>
+    public bool IsMonitor
+    {
+        get => _isMonitor;
+        set
+        {
+            if (!Set(ref _isMonitor, value)) return;
+            Reference.IsMonitor = value;
+            MonitorChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>Set without raising the event, for clearing the flag on the other devices.</summary>
+    public void ClearMonitorQuietly()
+    {
+        if (!_isMonitor) return;
+        _isMonitor = false;
+        Reference.IsMonitor = false;
+        OnPropertyChanged(nameof(IsMonitor));
+    }
+
+    public event Action<DeviceViewModel>? MonitorChanged;
 
     public event Action<DeviceViewModel>? MicRoutingChanged;
 

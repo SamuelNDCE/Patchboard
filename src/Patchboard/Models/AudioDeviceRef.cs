@@ -34,4 +34,14 @@ public sealed class AudioDeviceRef
     /// deliberately sent.
     /// </summary>
     public bool ReceivesMic { get; set; }
+
+    /// <summary>
+    /// Output devices only: this is the user's own headphones, used for previewing a
+    /// sound to themselves without broadcasting it.
+    ///
+    /// At most one device carries this at a time. A preview needs a stream that is already
+    /// open, so the monitor device is also a normal output; the difference is only that a
+    /// preview plays to this device alone and skips every other one.
+    /// </summary>
+    public bool IsMonitor { get; set; }
 }

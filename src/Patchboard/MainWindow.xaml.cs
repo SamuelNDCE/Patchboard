@@ -35,6 +35,43 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vm = new MainViewModel();
         DataContext = _vm;
+        RestoreWindowPlacement();
+    }
+
+    private void RestoreWindowPlacement()
+    {
+        var (width, height, left, top, maximized) = _vm.WindowPlacement;
+
+        Width = width;
+        Height = height;
+
+        // Only honour a saved position if it still lands on a screen that exists. Unplugging
+        // a second monitor would otherwise reopen the window at coordinates nobody can see.
+        if (!double.IsNaN(left) && !double.IsNaN(top) && IsOnAScreen(left, top, width, height))
+        {
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = left;
+            Top = top;
+        }
+
+        if (maximized) WindowState = WindowState.Maximized;
+    }
+
+    private static bool IsOnAScreen(double left, double top, double width, double height)
+    {
+        // Compare against the full virtual desktop, which spans every monitor. A window is
+        // reachable as long as a decent strip of its title bar is inside it.
+        var minX = SystemParameters.VirtualScreenLeft;
+        var minY = SystemParameters.VirtualScreenTop;
+        var maxX = minX + SystemParameters.VirtualScreenWidth;
+        var maxY = minY + SystemParameters.VirtualScreenHeight;
+
+        var visibleLeft = Math.Max(left, minX);
+        var visibleRight = Math.Min(left + width, maxX);
+        var visibleTop = Math.Max(top, minY);
+        var visibleBottom = Math.Min(top + height, maxY);
+
+        return visibleRight - visibleLeft >= 200 && visibleBottom - visibleTop >= 100;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -191,8 +228,25 @@ public partial class MainWindow : Window
         if (_vm.TryCompleteBind(key, Keyboard.Modifiers)) e.Handled = true;
     }
 
+    protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+    {
+        // RestoreBounds holds the normal size even while maximised, which is what should be
+        // restored next launch. Using ActualWidth here would save the maximised dimensions
+        // and the window would never return to its old size.
+        var bounds = WindowState == WindowState.Normal
+            ? new Rect(Left, Top, ActualWidth, ActualHeight)
+            : RestoreBounds;
+
+        _vm.SaveWindowPlacement(
+            bounds.Width, bounds.Height, bounds.Left, bounds.Top,
+            WindowState == WindowState.Maximized);
+
+        base.OnClosing(e);
+    }
+
     protected override void OnClosed(EventArgs e)
     {
+        // Dispose saves the config, so window placement recorded in OnClosing lands with it.
         _vm.Dispose();
         base.OnClosed(e);
     }

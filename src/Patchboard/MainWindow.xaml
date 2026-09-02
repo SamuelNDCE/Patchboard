@@ -76,6 +76,20 @@
                             </TextBlock>
                         </Grid>
 
+                        <!-- Mark one output as "my headphones". Right clicking a sound then
+                             offers to play it here alone, so it can be checked without
+                             going out to everyone. -->
+                        <CheckBox Style="{StaticResource DeviceCheck}"
+                                  Margin="0,7,0,0"
+                                  IsChecked="{Binding IsMonitor, Mode=TwoWay}"
+                                  Visibility="{Binding IsOutput, Converter={StaticResource BoolToVis}}"
+                                  AutomationProperties.Name="{Binding FriendlyName, StringFormat='Use {0} as my headphones'}"
+                                  ToolTip="Previews play here only, not to the other devices">
+                            <TextBlock Text="these are my headphones"
+                                       FontSize="11"
+                                       Foreground="{StaticResource TextDimBrush}" />
+                        </CheckBox>
+
                         <!-- Send the mic here too. Output rows only, and only while
                              passthrough is on. Off by default on every device, because
                              the mic reaching anything audible is what causes feedback. -->
@@ -419,6 +433,17 @@
                                     </Button.Height>
                                     <Button.ContextMenu>
                                         <ContextMenu>
+                                            <MenuItem Header="Play in my headphones"
+                                                      Command="{Binding PlacementTarget.Tag.PreviewCommand,
+                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <MenuItem Header="Volume..."
+                                                      Command="{Binding PlacementTarget.Tag.AdjustVolumeCommand,
+                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <Separator />
                                             <MenuItem Header="Rename"
                                                       Command="{Binding PlacementTarget.Tag.RenameCommand,
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -619,6 +644,64 @@
                             HorizontalAlignment="Right"
                             Command="{Binding ToggleSettingsCommand}"
                             Content="Done" />
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- ==================== Per sound volume ==================== -->
+        <Border Background="#CC000000"
+                Visibility="{Binding IsEditingVolume, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource BgBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Width="420"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Padding="24">
+                <StackPanel>
+                    <TextBlock Text="Volume"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}"
+                               Margin="0,0,0,4" />
+
+                    <TextBlock Text="{Binding VolumeSubject}"
+                               Style="{StaticResource Hint}"
+                               Margin="0,0,0,18" />
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Slider Grid.Column="0"
+                                Style="{StaticResource ThinSlider}"
+                                Value="{Binding EditingVolume, Mode=TwoWay}" />
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding EditingVolume, StringFormat={}{0:P0}}"
+                                   Width="44"
+                                   TextAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   FontSize="13"
+                                   Foreground="{StaticResource TextBrush}" />
+                    </Grid>
+
+                    <TextBlock Style="{StaticResource Hint}"
+                               Margin="0,4,0,18"
+                               Text="This is the level for this one sound, multiplied by the device volume and the master. Preview plays it in your headphones only." />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource ToolButton}"
+                                Content="Preview"
+                                Margin="0,0,8,0"
+                                IsEnabled="{Binding HasMonitor}"
+                                Command="{Binding PreviewVolumeCommand}"
+                                ToolTip="Hear it at this level, in your headphones only" />
+                        <Button Style="{StaticResource ToolButton}"
+                                Content="Done"
+                                Command="{Binding CloseVolumeCommand}" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Border>
