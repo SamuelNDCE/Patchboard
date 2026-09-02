@@ -314,6 +314,16 @@ Section("5c. MIC ROUTING SAFETY");
 Check("a fresh device reference does not carry the mic", !new AudioDeviceRef().ReceivesMic,
     "sounds go everywhere, the mic goes only where it is sent");
 
+// Pressing a playing button stops it rather than stacking another copy.
+Check("a new sound defaults to toggle", new SoundButton().Retrigger == RetriggerMode.Toggle,
+    "click again to stop, not to layer");
+Check("sound gain can be boosted past unity", SoundButton.MaxVolume >= 2f,
+    $"ceiling is {SoundButton.MaxVolume * 100:0}%");
+var boosted = new SoundButton { Volume = 1.8f };
+Check("a boosted volume is not clamped back to 100%",
+    Math.Abs(Math.Clamp(boosted.Volume, 0f, SoundButton.MaxVolume) - 1.8f) < 0.001f,
+    "the config validator used to cap sound gain at unity");
+
 var micSafeTarget = outputs.FirstOrDefault(o =>
     o.FriendlyName.Contains("Steam Streaming Speakers", StringComparison.OrdinalIgnoreCase));
 

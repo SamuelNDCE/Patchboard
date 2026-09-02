@@ -302,7 +302,7 @@ public sealed class AudioEngine : IDisposable
 
             if (targets.Count == 0) return null;
 
-            var handle = new PlayingSound(buttonId, Math.Clamp(soundVolume, 0f, 1f));
+            var handle = new PlayingSound(buttonId, Math.Clamp(soundVolume, 0f, SoundButton.MaxVolume));
             foreach (var channel in targets)
             {
                 var provider = new CachedSoundSampleProvider(

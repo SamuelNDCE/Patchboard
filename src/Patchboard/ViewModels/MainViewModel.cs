@@ -25,6 +25,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly MicCaptureService _mic;
     private readonly HotkeyService _hotkeys = new();
     private readonly DispatcherTimer _timer;
+    private readonly DispatcherTimer _volumeSaveTimer;
+    private bool _pendingVolumeSave;
 
     /// <summary>Decoded audio, keyed by file path. A clip is decoded once per session.</summary>
     private readonly Dictionary<string, CachedSound> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -39,9 +41,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _renameText = "";
     private string _renameSubject = "";
     private SoundButtonViewModel? _renameTarget;
-    private bool _isEditingVolume;
-    private string _volumeSubject = "";
-    private SoundButtonViewModel? _volumeTarget;
 
     public MainViewModel()
     {
@@ -51,6 +50,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Sounds = new ObservableCollection<SoundButtonViewModel>(
             _config.Sounds.OrderBy(s => s.Order).Select(s => new SoundButtonViewModel(s)));
+
+        foreach (var sound in Sounds) Attach(sound);
 
         SoundsView = CollectionViewSource.GetDefaultView(Sounds);
         SoundsView.Filter = FilterSound;
@@ -81,9 +82,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
         MuteMicCommand = new RelayCommand(MuteMic);
         PreviewCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PreviewInHeadphones(vm); });
-        AdjustVolumeCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginVolume(vm); });
-        CloseVolumeCommand = new RelayCommand(CloseVolume);
-        PreviewVolumeCommand = new RelayCommand(() => { if (_volumeTarget is not null) PreviewInHeadphones(_volumeTarget); });
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         ColumnsUpCommand = new RelayCommand(() => GridColumns++);
@@ -101,6 +99,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         };
         _timer.Tick += OnTick;
         _timer.Start();
+
+        _volumeSaveTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(400),
+        };
+        _volumeSaveTimer.Tick += (_, _) =>
+        {
+            _volumeSaveTimer.Stop();
+            if (!_pendingVolumeSave) return;
+            _pendingVolumeSave = false;
+            Save();
+        };
 
         Status = Sounds.Count == 0
             ? "Drop audio files anywhere to add them."
@@ -137,9 +147,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand UseCableOutputCommand { get; }
     public RelayCommand MuteMicCommand { get; }
     public RelayCommand PreviewCommand { get; }
-    public RelayCommand AdjustVolumeCommand { get; }
-    public RelayCommand CloseVolumeCommand { get; }
-    public RelayCommand PreviewVolumeCommand { get; }
     public RelayCommand ToggleSettingsCommand { get; }
     public RelayCommand ClearSearchCommand { get; }
     public RelayCommand ColumnsUpCommand { get; }
@@ -351,6 +358,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// device is switched on if it was not already: a preview plays through an existing
     /// stream, so an unticked monitor would silently do nothing.
     /// </summary>
+    /// <summary>Give a tile the hooks it needs: preview, and a save when its volume moves.</summary>
+    private void Attach(SoundButtonViewModel vm)
+    {
+        vm.PreviewCommand = new RelayCommand(() => PreviewInHeadphones(vm));
+        vm.VolumeChanged += OnSoundVolumeChanged;
+    }
+
+    /// <summary>
+    /// Dragging a slider raises this on every tick. Writing the whole config each time
+    /// would rewrite a file with 206 sounds in it dozens of times a second, so the save is
+    /// deferred until the drag settles.
+    /// </summary>
+    private void OnSoundVolumeChanged(SoundButtonViewModel vm)
+    {
+        _pendingVolumeSave = true;
+        _volumeSaveTimer.Stop();
+        _volumeSaveTimer.Start();
+        Status = $"{vm.DisplayName} at {vm.VolumeText}.";
+    }
+
     private void OnMonitorChanged(DeviceViewModel vm)
     {
         if (vm.IsMonitor)
@@ -408,56 +435,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // it is never what someone wants.
         _engine.Play(vm.Id, sound, vm.Model.Volume, RetriggerMode.Restart, monitor.Id);
         Status = $"Previewing {vm.DisplayName} in {monitor.FriendlyName} only.";
-    }
-
-    // ---- Per sound volume ---------------------------------------------------------
-
-    public bool IsEditingVolume
-    {
-        get => _isEditingVolume;
-        private set => Set(ref _isEditingVolume, value);
-    }
-
-    public string VolumeSubject
-    {
-        get => _volumeSubject;
-        private set => Set(ref _volumeSubject, value);
-    }
-
-    /// <summary>
-    /// The volume of the sound being edited, 0 to 1. Applied to the model as the slider
-    /// moves so a preview plays at the level being chosen rather than the old one.
-    /// </summary>
-    public float EditingVolume
-    {
-        get => _volumeTarget?.Model.Volume ?? 1f;
-        set
-        {
-            if (_volumeTarget is null) return;
-            var clamped = Math.Clamp(value, 0f, 1f);
-            if (Math.Abs(_volumeTarget.Model.Volume - clamped) < 0.0001f) return;
-            _volumeTarget.Model.Volume = clamped;
-            OnPropertyChanged();
-        }
-    }
-
-    private void BeginVolume(SoundButtonViewModel vm)
-    {
-        _volumeTarget = vm;
-        VolumeSubject = vm.DisplayName;
-        OnPropertyChanged(nameof(EditingVolume));
-        IsEditingVolume = true;
-    }
-
-    private void CloseVolume()
-    {
-        IsEditingVolume = false;
-        var target = _volumeTarget;
-        _volumeTarget = null;
-        if (target is null) return;
-
-        Save();
-        Status = $"{target.DisplayName} set to {target.Model.Volume * 100:0}%.";
     }
 
     private void OnMicRoutingChanged(DeviceViewModel vm)
@@ -740,7 +717,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             };
 
             _config.Sounds.Add(model);
-            Sounds.Add(new SoundButtonViewModel(model));
+            var vm = new SoundButtonViewModel(model);
+            Attach(vm);
+            Sounds.Add(vm);
             added++;
         }
 
@@ -1011,7 +990,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             model.Order = Sounds.Count;
             _config.Sounds.Add(model);
-            Sounds.Add(new SoundButtonViewModel(model));
+            var vm = new SoundButtonViewModel(model);
+            Attach(vm);
+            Sounds.Add(vm);
             added++;
         }
 
@@ -1041,6 +1022,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        _volumeSaveTimer.Stop();
         Save();
         _hotkeys.Dispose();
         _mic.Dispose();

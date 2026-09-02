@@ -35,10 +35,22 @@ public sealed class SoundButton
     /// <summary>Optional custom button colour as "#RRGGBB". Null means the default surface.</summary>
     public string? Color { get; set; }
 
-    /// <summary>Per-sound gain, 0.0 to 1.0, multiplied with each device's own volume.</summary>
+    /// <summary>
+    /// Ceiling for per-sound gain. Above 1.0 is a genuine boost for quiet recordings.
+    /// Pushed far enough it will clip, which is the honest consequence of asking for more
+    /// level than the sample has, so the UI marks the region rather than preventing it.
+    /// </summary>
+    public const float MaxVolume = 2.0f;
+
+    /// <summary>Per-sound gain, 0.0 to 2.0, multiplied with each device's volume and the master.</summary>
     public float Volume { get; set; } = 1.0f;
 
-    public RetriggerMode Retrigger { get; set; } = RetriggerMode.Overlap;
+    /// <summary>
+    /// Toggle by default. Pressing a button that is already sounding stops it, which is
+    /// what a soundboard user reaches for when a clip is running long. Overlap is still
+    /// available per sound for short stabs you want to stack.
+    /// </summary>
+    public RetriggerMode Retrigger { get; set; } = RetriggerMode.Toggle;
 
     public Hotkey Hotkey { get; set; } = new();
 

@@ -371,6 +371,172 @@
         </Setter>
     </Style>
 
+    <!-- ============================ Context menu ============================
+         WPF's default menu chrome is light grey with a blue highlight, which against a
+         near-black window looks like a different application has opened on top of it.
+         These are implicit styles, so every menu in the app picks them up.
+    -->
+    <Style TargetType="Separator">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="12,7" />
+        <Setter Property="Background" Value="#242424" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Separator">
+                    <Border Height="1" Background="{TemplateBinding Background}" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ContextMenu">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="#161616"
+                            BorderBrush="#303030"
+                            BorderThickness="1"
+                            CornerRadius="9"
+                            Padding="5"
+                            MinWidth="180"
+                            SnapsToDevicePixels="True">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.55" Color="#000000" />
+                        </Border.Effect>
+                        <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="MenuItem">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Grid>
+                        <Border x:Name="Bd"
+                                Background="Transparent"
+                                CornerRadius="5"
+                                Padding="11,7">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <ContentPresenter Grid.Column="0"
+                                                  ContentSource="Header"
+                                                  RecognizesAccessKey="True"
+                                                  VerticalAlignment="Center" />
+
+                                <!-- Submenu arrow, shown only when there are children -->
+                                <Path x:Name="Arrow"
+                                      Grid.Column="1"
+                                      Data="M 0,0 L 3.5,3.5 L 0,7"
+                                      Stroke="#7A7A7A"
+                                      StrokeThickness="1.3"
+                                      StrokeStartLineCap="Round"
+                                      StrokeEndLineCap="Round"
+                                      VerticalAlignment="Center"
+                                      Margin="24,0,2,0"
+                                      Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+
+                        <Popup x:Name="PART_Popup"
+                               AllowsTransparency="True"
+                               Placement="Right"
+                               HorizontalOffset="2"
+                               VerticalOffset="-6"
+                               IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               PopupAnimation="None"
+                               Focusable="False">
+                            <Border Background="#161616"
+                                    BorderBrush="#303030"
+                                    BorderThickness="1"
+                                    CornerRadius="9"
+                                    Padding="5">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.55" Color="#000000" />
+                                </Border.Effect>
+                                <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </Border>
+                        </Popup>
+                    </Grid>
+
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="HasItems" Value="True">
+                            <Setter TargetName="Arrow" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsHighlighted" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#262626" />
+                            <Setter TargetName="Arrow" Property="Stroke" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSubmenuOpen" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="#262626" />
+                            <Setter TargetName="Arrow" Property="Stroke" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A dim caption at the top of a menu, naming what the menu acts on. Not clickable. -->
+    <Style x:Key="MenuHeaderItem" TargetType="MenuItem">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <TextBlock Text="{TemplateBinding Header}"
+                               FontSize="10"
+                               FontWeight="SemiBold"
+                               Foreground="#6E6E6E"
+                               TextTrimming="CharacterEllipsis"
+                               MaxWidth="220"
+                               Margin="12,6,12,7" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- First item of a group. Space above it does the work a rule used to do, without
+         a line that reads as underlining the label above it. -->
+    <Style x:Key="MenuGroupStart" TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}">
+        <Setter Property="Margin" Value="0,7,0,0" />
+    </Style>
+
+    <Style x:Key="MenuDangerItem" TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}">
+        <Setter Property="Margin" Value="0,7,0,0" />
+        <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+    </Style>
+
+    <!-- A menu row that holds a panel of controls rather than being a command. No hover
+         highlight, because highlighting the whole block while reaching for the slider
+         reads as though the panel itself is about to do something. -->
+    <Style x:Key="MenuPanelItem" TargetType="MenuItem">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="MenuItem">
+                    <Border Background="Transparent" Padding="6,2">
+                        <ContentPresenter ContentSource="Header" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============================ Toggle switch ============================
          A sliding pill rather than a tick box. Used for mic passthrough, which is a
          mode you turn on and off rather than an item you select, and which carries a

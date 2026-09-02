@@ -433,34 +433,77 @@
                                     </Button.Height>
                                     <Button.ContextMenu>
                                         <ContextMenu>
-                                            <MenuItem Header="Play in my headphones"
-                                                      Command="{Binding PlacementTarget.Tag.PreviewCommand,
-                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                      CommandParameter="{Binding PlacementTarget.DataContext,
-                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <MenuItem Header="Volume..."
-                                                      Command="{Binding PlacementTarget.Tag.AdjustVolumeCommand,
-                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                      CommandParameter="{Binding PlacementTarget.DataContext,
-                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <Separator />
+                                            <!-- Name of the sound the menu is acting on, which
+                                                 matters when tiles are small and the labels clip. -->
+                                            <MenuItem Style="{StaticResource MenuHeaderItem}"
+                                                      Header="{Binding DisplayName}" />
+
+                                            <!-- Volume lives inline rather than behind a submenu:
+                                                 the slider, the readout and the preview are one
+                                                 thing you use together, and a submenu made you
+                                                 hover to reach a control you then had to drag. -->
+                                            <MenuItem Style="{StaticResource MenuPanelItem}" StaysOpenOnClick="True">
+                                                <MenuItem.Header>
+                                                    <StackPanel Width="196">
+                                                        <Grid Margin="0,0,0,5">
+                                                            <TextBlock Text="Volume"
+                                                                       FontSize="11"
+                                                                       Foreground="{StaticResource TextDimBrush}" />
+                                                            <TextBlock Text="{Binding VolumeText}"
+                                                                       FontSize="12"
+                                                                       FontWeight="SemiBold"
+                                                                       HorizontalAlignment="Right">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding IsBoosted}" Value="True">
+                                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </Grid>
+
+                                                        <Slider Style="{StaticResource ThinSlider}"
+                                                                Minimum="0" Maximum="2"
+                                                                SmallChange="0.05" LargeChange="0.1"
+                                                                Value="{Binding Volume, Mode=TwoWay}" />
+
+                                                        <Grid Margin="0,2,0,8">
+                                                            <TextBlock Text="0" FontSize="9"
+                                                                       Foreground="#5A5A5A" HorizontalAlignment="Left" />
+                                                            <TextBlock Text="100" FontSize="9"
+                                                                       Foreground="#5A5A5A" HorizontalAlignment="Center" />
+                                                            <TextBlock Text="200" FontSize="9"
+                                                                       Foreground="#5A5A5A" HorizontalAlignment="Right" />
+                                                        </Grid>
+
+                                                        <TextBlock Text="Boosted, may clip"
+                                                                   FontSize="10"
+                                                                   Foreground="{StaticResource DangerBrush}"
+                                                                   Margin="0,0,0,7"
+                                                                   Visibility="{Binding IsBoosted, Converter={StaticResource BoolToVis}}" />
+
+                                                        <Button Style="{StaticResource ToolButton}"
+                                                                Content="Preview in my headphones"
+                                                                FontSize="11"
+                                                                Padding="6,6"
+                                                                Command="{Binding PreviewCommand}" />
+                                                    </StackPanel>
+                                                </MenuItem.Header>
+                                            </MenuItem>
+
+                                            <!-- Groups are separated by spacing rather than rules.
+                                                 A line sitting under a label reads as underlining
+                                                 that label rather than dividing the group. -->
                                             <MenuItem Header="Rename"
+                                                      Style="{StaticResource MenuGroupStart}"
                                                       Command="{Binding PlacementTarget.Tag.RenameCommand,
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding PlacementTarget.DataContext,
                                                                         RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <Separator />
-                                            <MenuItem Header="Set hotkey"
-                                                      Command="{Binding PlacementTarget.Tag.BeginBindHotkeyCommand,
-                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                      CommandParameter="{Binding PlacementTarget.DataContext,
-                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <MenuItem Header="Clear hotkey"
-                                                      Command="{Binding PlacementTarget.Tag.ClearHotkeyCommand,
-                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                                                      CommandParameter="{Binding PlacementTarget.DataContext,
-                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <Separator />
                                             <MenuItem Header="Set image"
                                                       Command="{Binding PlacementTarget.Tag.SetImageCommand,
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -471,8 +514,21 @@
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding PlacementTarget.DataContext,
                                                                         RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
-                                            <Separator />
+
+                                            <MenuItem Header="Set hotkey"
+                                                      Style="{StaticResource MenuGroupStart}"
+                                                      Command="{Binding PlacementTarget.Tag.BeginBindHotkeyCommand,
+                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <MenuItem Header="Clear hotkey"
+                                                      Command="{Binding PlacementTarget.Tag.ClearHotkeyCommand,
+                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+
                                             <MenuItem Header="Remove"
+                                                      Style="{StaticResource MenuDangerItem}"
                                                       Command="{Binding PlacementTarget.Tag.RemoveSoundCommand,
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                                       CommandParameter="{Binding PlacementTarget.DataContext,
@@ -644,64 +700,6 @@
                             HorizontalAlignment="Right"
                             Command="{Binding ToggleSettingsCommand}"
                             Content="Done" />
-                </StackPanel>
-            </Border>
-        </Border>
-
-        <!-- ==================== Per sound volume ==================== -->
-        <Border Background="#CC000000"
-                Visibility="{Binding IsEditingVolume, Converter={StaticResource BoolToVis}}">
-            <Border Background="{StaticResource BgBrush}"
-                    BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8"
-                    Width="420"
-                    VerticalAlignment="Center"
-                    HorizontalAlignment="Center"
-                    Padding="24">
-                <StackPanel>
-                    <TextBlock Text="Volume"
-                               FontSize="15"
-                               FontWeight="SemiBold"
-                               Foreground="{StaticResource TextBrush}"
-                               Margin="0,0,0,4" />
-
-                    <TextBlock Text="{Binding VolumeSubject}"
-                               Style="{StaticResource Hint}"
-                               Margin="0,0,0,18" />
-
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Slider Grid.Column="0"
-                                Style="{StaticResource ThinSlider}"
-                                Value="{Binding EditingVolume, Mode=TwoWay}" />
-                        <TextBlock Grid.Column="1"
-                                   Text="{Binding EditingVolume, StringFormat={}{0:P0}}"
-                                   Width="44"
-                                   TextAlignment="Right"
-                                   VerticalAlignment="Center"
-                                   FontSize="13"
-                                   Foreground="{StaticResource TextBrush}" />
-                    </Grid>
-
-                    <TextBlock Style="{StaticResource Hint}"
-                               Margin="0,4,0,18"
-                               Text="This is the level for this one sound, multiplied by the device volume and the master. Preview plays it in your headphones only." />
-
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Style="{StaticResource ToolButton}"
-                                Content="Preview"
-                                Margin="0,0,8,0"
-                                IsEnabled="{Binding HasMonitor}"
-                                Command="{Binding PreviewVolumeCommand}"
-                                ToolTip="Hear it at this level, in your headphones only" />
-                        <Button Style="{StaticResource ToolButton}"
-                                Content="Done"
-                                Command="{Binding CloseVolumeCommand}" />
-                    </StackPanel>
                 </StackPanel>
             </Border>
         </Border>

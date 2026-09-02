@@ -315,7 +315,8 @@ public sealed class ConfigService
             sound.Name = OrEmpty(sound.Name);
             sound.FilePath = sound.FilePath.Trim();
             sound.Hotkey = OrNew(sound.Hotkey);
-            sound.Volume = Clamp01(sound.Volume);
+            // Sounds may be boosted above unity, unlike device and master gain.
+            sound.Volume = Math.Clamp(sound.Volume, 0f, SoundButton.MaxVolume);
         }
 
         ValidateDevices(config.OutputDevices);

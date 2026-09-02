@@ -34,6 +34,38 @@ public sealed class SoundButtonViewModel : ObservableObject
 
     public string? Color => Model.Color;
 
+    /// <summary>
+    /// Per-sound gain, 0 to 2. Above 1 is a real boost for a quiet recording.
+    /// </summary>
+    public float Volume
+    {
+        get => Model.Volume;
+        set
+        {
+            var clamped = Math.Clamp(value, 0f, SoundButton.MaxVolume);
+            if (Math.Abs(Model.Volume - clamped) < 0.0001f) return;
+            Model.Volume = clamped;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(VolumeText));
+            OnPropertyChanged(nameof(IsBoosted));
+            VolumeChanged?.Invoke(this);
+        }
+    }
+
+    public string VolumeText => $"{Model.Volume * 100:0}%";
+
+    /// <summary>Above unity, where clipping becomes possible. The UI colours this.</summary>
+    public bool IsBoosted => Model.Volume > 1.001f;
+
+    /// <summary>
+    /// Set by MainViewModel so the volume submenu can preview without walking up to the
+    /// window. A submenu lives in its own popup, where an AncestorType lookup for the
+    /// ContextMenu does not reliably resolve.
+    /// </summary>
+    public RelayCommand? PreviewCommand { get; set; }
+
+    public event Action<SoundButtonViewModel>? VolumeChanged;
+
     /// <summary>Drives the accent edge and the progress line.</summary>
     public bool IsPlaying
     {
