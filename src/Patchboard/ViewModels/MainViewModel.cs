@@ -35,6 +35,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _settingsOpen;
     private bool _isBindingHotkey;
     private SoundButtonViewModel? _bindTarget;
+    private bool _isRenaming;
+    private string _renameText = "";
+    private string _renameSubject = "";
+    private SoundButtonViewModel? _renameTarget;
 
     public MainViewModel()
     {
@@ -60,6 +64,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StopAllCommand = new RelayCommand(StopAll);
         AddSoundsCommand = new RelayCommand(PickSounds);
         RemoveSoundCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) Remove(vm); });
+        RenameCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginRename(vm); });
+        ConfirmRenameCommand = new RelayCommand(ConfirmRename);
+        CancelRenameCommand = new RelayCommand(CancelRename);
         SetImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PickImage(vm); });
         ClearImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) ClearImage(vm); });
         BeginBindHotkeyCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginBind(vm); });
@@ -106,6 +113,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand StopAllCommand { get; }
     public RelayCommand AddSoundsCommand { get; }
     public RelayCommand RemoveSoundCommand { get; }
+    public RelayCommand RenameCommand { get; }
+    public RelayCommand ConfirmRenameCommand { get; }
+    public RelayCommand CancelRenameCommand { get; }
     public RelayCommand SetImageCommand { get; }
     public RelayCommand ClearImageCommand { get; }
     public RelayCommand BeginBindHotkeyCommand { get; }
@@ -495,17 +505,79 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         for (var i = 0; i < Sounds.Count; i++) Sounds[i].Model.Order = i;
     }
 
-    /// <summary>Move a button to a new index. Used by drag to reorder within the grid.</summary>
-    public void MoveSound(SoundButtonViewModel vm, int newIndex)
+    /// <summary>
+    /// Drop <paramref name="dragged"/> onto <paramref name="target"/>'s position.
+    ///
+    /// Works on the underlying collection rather than on view indices, so reordering
+    /// still lands correctly while a search filter is hiding some of the buttons.
+    /// </summary>
+    public void MoveSound(SoundButtonViewModel dragged, SoundButtonViewModel target)
     {
-        var oldIndex = Sounds.IndexOf(vm);
-        if (oldIndex < 0) return;
-        newIndex = Math.Clamp(newIndex, 0, Sounds.Count - 1);
-        if (oldIndex == newIndex) return;
+        if (ReferenceEquals(dragged, target)) return;
 
-        Sounds.Move(oldIndex, newIndex);
+        var from = Sounds.IndexOf(dragged);
+        var to = Sounds.IndexOf(target);
+        if (from < 0 || to < 0) return;
+
+        Sounds.Move(from, to);
         Reorder();
         Save();
+        Status = $"Moved {dragged.DisplayName}.";
+    }
+
+    // ---- Rename -----------------------------------------------------------------
+
+    /// <summary>True while the rename box is open.</summary>
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        private set => Set(ref _isRenaming, value);
+    }
+
+    /// <summary>Bound to the rename text box.</summary>
+    public string RenameText
+    {
+        get => _renameText;
+        set => Set(ref _renameText, value);
+    }
+
+    /// <summary>Shown above the rename box so it is obvious which button is being renamed.</summary>
+    public string RenameSubject
+    {
+        get => _renameSubject;
+        private set => Set(ref _renameSubject, value);
+    }
+
+    private void BeginRename(SoundButtonViewModel vm)
+    {
+        _renameTarget = vm;
+        RenameSubject = Path.GetFileName(vm.Model.FilePath);
+        RenameText = vm.DisplayName;
+        IsRenaming = true;
+    }
+
+    private void ConfirmRename()
+    {
+        if (_renameTarget is null) { IsRenaming = false; return; }
+
+        var name = RenameText.Trim();
+        var target = _renameTarget;
+        _renameTarget = null;
+        IsRenaming = false;
+
+        // An empty name falls back to the file name rather than leaving a blank button.
+        target.Model.Name = name;
+        target.Refresh();
+        Save();
+        SoundsView.Refresh();
+
+        Status = $"Renamed to {target.DisplayName}.";
+    }
+
+    private void CancelRename()
+    {
+        _renameTarget = null;
+        IsRenaming = false;
     }
 
     private void PickImage(SoundButtonViewModel vm)

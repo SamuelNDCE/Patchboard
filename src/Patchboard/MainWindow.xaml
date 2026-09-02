@@ -107,9 +107,10 @@
 
                         <TextBlock Style="{StaticResource PanelHeader}" Text="INPUT" />
 
-                        <CheckBox Style="{StaticResource DeviceCheck}"
+                        <CheckBox Style="{StaticResource ToggleSwitch}"
                                   IsChecked="{Binding MicEnabled, Mode=TwoWay}"
-                                  Margin="0,0,0,8">
+                                  Margin="0,2,0,10"
+                                  AutomationProperties.Name="Mix my microphone in">
                             <TextBlock Text="Mix my microphone in" Foreground="{StaticResource TextBrush}" />
                         </CheckBox>
 
@@ -143,12 +144,31 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
-                        <TextBox Grid.Column="0"
-                                 Style="{StaticResource SearchBox}"
-                                 MaxWidth="320"
-                                 HorizontalAlignment="Left"
-                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
-                                 ToolTip="Filter sounds by name" />
+                        <!-- Fixed width, not MaxWidth with Left alignment: an empty TextBox
+                             sizes to its content and collapses to a small blank square. -->
+                        <Grid Grid.Column="0" Width="300" HorizontalAlignment="Left">
+                            <TextBox x:Name="SearchInput"
+                                     Style="{StaticResource SearchBox}"
+                                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
+                                     ToolTip="Filter sounds by name" />
+                            <TextBlock Text="Search sounds"
+                                       IsHitTestVisible="False"
+                                       Foreground="#5A5A5A"
+                                       FontSize="12"
+                                       Margin="11,0,0,0"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Text, ElementName=SearchInput}" Value="">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
 
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
                             <TextBlock Text="Master"
@@ -193,7 +213,12 @@
                                      silently drops every item beyond rows times columns,
                                      which would hide sounds with no explanation. Tile
                                      height carries the rows setting instead. -->
-                                <UniformGrid Columns="{Binding DataContext.GridColumns,
+                                <!-- VerticalAlignment=Top is load bearing. Left to stretch,
+                                     UniformGrid divides the whole viewport height between
+                                     its rows, so a short library gets tall rows with the
+                                     tiles floating in the middle of them. -->
+                                <UniformGrid VerticalAlignment="Top"
+                                             Columns="{Binding DataContext.GridColumns,
                                                        RelativeSource={RelativeSource AncestorType=Window}}" />
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
@@ -204,6 +229,13 @@
                                         Command="{Binding DataContext.PlayCommand,
                                                   RelativeSource={RelativeSource AncestorType=Window}}"
                                         CommandParameter="{Binding}"
+                                        AutomationProperties.Name="{Binding DisplayName}"
+                                        AutomationProperties.HelpText="{Binding HotkeyText}"
+                                        AllowDrop="True"
+                                        PreviewMouseLeftButtonDown="OnTileMouseDown"
+                                        PreviewMouseMove="OnTileMouseMove"
+                                        DragOver="OnTileDragOver"
+                                        Drop="OnTileDrop"
                                         Tag="{Binding DataContext,
                                               RelativeSource={RelativeSource AncestorType=Window}}">
                                     <Button.Height>
@@ -215,6 +247,12 @@
                                     </Button.Height>
                                     <Button.ContextMenu>
                                         <ContextMenu>
+                                            <MenuItem Header="Rename"
+                                                      Command="{Binding PlacementTarget.Tag.RenameCommand,
+                                                                RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                      CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                        RelativeSource={RelativeSource AncestorType=ContextMenu}}" />
+                                            <Separator />
                                             <MenuItem Header="Set hotkey"
                                                       Command="{Binding PlacementTarget.Tag.BeginBindHotkeyCommand,
                                                                 RelativeSource={RelativeSource AncestorType=ContextMenu}}"
@@ -384,6 +422,51 @@
                             HorizontalAlignment="Right"
                             Command="{Binding ToggleSettingsCommand}"
                             Content="Done" />
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- ==================== Rename ==================== -->
+        <Border Background="#CC000000"
+                IsVisibleChanged="OnRenameVisibleChanged"
+                Visibility="{Binding IsRenaming, Converter={StaticResource BoolToVis}}">
+            <Border Background="{StaticResource BgBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Width="420"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Padding="24">
+                <StackPanel>
+                    <TextBlock Text="Rename button"
+                               FontSize="15"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}"
+                               Margin="0,0,0,4" />
+
+                    <TextBlock Text="{Binding RenameSubject}"
+                               Style="{StaticResource Hint}"
+                               Margin="0,0,0,14" />
+
+                    <TextBox x:Name="RenameBox"
+                             Style="{StaticResource SearchBox}"
+                             Text="{Binding RenameText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
+                             KeyDown="OnRenameKeyDown" />
+
+                    <TextBlock Style="{StaticResource Hint}"
+                               Margin="0,10,0,18"
+                               Text="Leave it empty to go back to the file name. Enter to save, Escape to cancel." />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Style="{StaticResource ToolButton}"
+                                Content="Cancel"
+                                Margin="0,0,8,0"
+                                Command="{Binding CancelRenameCommand}" />
+                        <Button Style="{StaticResource ToolButton}"
+                                Content="Save"
+                                Command="{Binding ConfirmRenameCommand}" />
+                    </StackPanel>
                 </StackPanel>
             </Border>
         </Border>

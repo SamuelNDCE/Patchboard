@@ -9,6 +9,19 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      Put System.IO back into the implicit usings.
+
+      Setting UseWPF=true pulls in Microsoft.NET.Sdk.WindowsDesktop.WPF.props, which does
+      "<Using Remove="System.IO" />" at line 6. The effect is that Path, File, Directory
+      and FileMode are unresolved in a WPF project even though ImplicitUsings is enabled,
+      which reads as a nonsense error the first time you hit it. Restoring it here rather
+      than adding a using to a dozen files keeps the reason in one place.
+    -->
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="LiteDB" Version="5.0.21" />
     <PackageReference Include="NAudio" Version="3.0.1" />
   </ItemGroup>
