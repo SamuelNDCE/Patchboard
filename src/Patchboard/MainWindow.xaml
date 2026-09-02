@@ -4,6 +4,7 @@
         xmlns:vm="clr-namespace:Patchboard.ViewModels"
         xmlns:sys="clr-namespace:System;assembly=System.Runtime"
         Title="Patchboard"
+        Icon="app.ico"
         Height="780" Width="1240"
         MinHeight="480" MinWidth="860"
         Background="{StaticResource BgBrush}"
