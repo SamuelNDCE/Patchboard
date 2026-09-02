@@ -123,9 +123,16 @@ build fails with MSB3027.
 
     dotnet run --project tests/Patchboard.Checks
 
-44 checks covering config, decoding his real files, the whole playback chain in memory,
-device enumeration and resolution, live WASAPI output, mic capture, hotkey parsing, and
-both import paths. It prints PASSED and FAILED counts and exits after reporting.
+59 checks covering config, decoding his real files, the whole playback chain in memory,
+device enumeration and resolution, live WASAPI output, mic capture and routing, preview
+to a single device, settings round tripping through a real save and load, hotkey parsing,
+and both import paths. It prints PASSED and FAILED counts and exits after reporting.
+
+**Never run it with `--no-build`.** That silently executes the previous binary, so code
+that does not compile still reports a pass. It happened once and the run looked clean.
+
+The settings round trip writes to his real config file and restores it in a `finally`.
+Any check added there must keep that guarantee, and the suite asserts the restore.
 
 Two rules the checks themselves obey, and any addition to them must too:
 
