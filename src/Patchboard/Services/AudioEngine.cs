@@ -12,7 +12,7 @@ internal sealed class OutputChannel : IDisposable
     public required string DeviceId { get; init; }
     public required string FriendlyName { get; init; }
     public required MMDevice Device { get; init; }
-    public required WasapiOut Output { get; init; }
+    public required WasapiPlayer Output { get; init; }
     public required MixingSampleProvider Mixer { get; init; }
 
     /// <summary>Per-device gain from the UI, 0.0 to 1.0.</summary>
@@ -148,21 +148,39 @@ public sealed class AudioEngine : IDisposable
             ReadFully = true,
         };
 
-        // Match the endpoint's own shared-mode format. Getting this wrong is what makes
-        // a device initialise without error and then never produce sound.
+        // Shared mode is mandatory, not a preference. Exclusive mode seizes the endpoint
+        // and would cut off Discord, the game, and everything else using it.
+        //
+        // MMCSS raises the render thread's priority, which matters here because several
+        // devices are being fed at once and a late buffer on any one of them is an audible
+        // dropout. No stream category is set deliberately: the Communications and
+        // SoundEffects categories change how Windows ducks audio during calls, and picking
+        // one wrongly would make the soundboard go quiet mid-call.
+        var output = new WasapiPlayerBuilder()
+            .WithDevice(device)
+            .WithSharedMode()
+            .WithEventSync()
+            .WithLatency(_latencyMs)
+            .WithMmcssThreadPriority("Pro Audio")
+            .Build();
+
+        // Ask the endpoint what it accepts rather than inferring it. A format the device
+        // rejects is what makes an output initialise without error and then stay silent.
         ISampleProvider chain = mixer;
-        var deviceFormat = device.AudioClient.MixFormat;
+        if (!output.IsFormatSupported(AudioFormat.Mix))
+        {
+            var deviceFormat = output.DeviceMixFormat;
 
-        if (deviceFormat.SampleRate != AudioFormat.SampleRate)
-            chain = new WdlResamplingSampleProvider(chain, deviceFormat.SampleRate);
+            if (deviceFormat.SampleRate != AudioFormat.SampleRate)
+                chain = new WdlResamplingSampleProvider(chain, deviceFormat.SampleRate);
 
-        if (deviceFormat.Channels > 2)
-            chain = new StereoToMultiChannelSampleProvider(chain, deviceFormat.Channels);
-        else if (deviceFormat.Channels == 1)
-            chain = new StereoToMonoSampleProvider(chain);
+            if (deviceFormat.Channels > 2)
+                chain = new StereoToMultiChannelSampleProvider(chain, deviceFormat.Channels);
+            else if (deviceFormat.Channels == 1)
+                chain = new StereoToMonoSampleProvider(chain);
+        }
 
-        var output = new WasapiOut(device, AudioClientShareMode.Shared, true, _latencyMs);
-        output.Init(chain);
+        output.Init(chain.ToWaveProvider());
         output.Play();
 
         return new OutputChannel

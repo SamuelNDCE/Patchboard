@@ -300,51 +300,44 @@ public sealed class ConfigService
         config.LatencyMs = Math.Clamp(config.LatencyMs, MinLatencyMs, MaxLatencyMs);
         config.MasterVolume = Clamp01(config.MasterVolume);
 
-        var sounds = new List<SoundButton>(config.Sounds.Count);
+        // Filtered in place rather than replaced. Save validates too, and the view model
+        // adds and removes through these same list instances, so handing it a new list on
+        // every save would leave anything holding the old one silently editing a corpse.
+        //
+        // A button with no file can never be played and cannot be repaired from here,
+        // because nothing is left to say which sound it was meant to be.
+        config.Sounds.RemoveAll(s => s is null || string.IsNullOrWhiteSpace(s.FilePath));
+
         foreach (var sound in config.Sounds)
         {
-            if (sound is null) continue;
-
-            // A button with no file can never be played and cannot be repaired from here,
-            // because nothing is left to say which sound it was meant to be.
-            if (string.IsNullOrWhiteSpace(sound.FilePath)) continue;
-
             if (string.IsNullOrWhiteSpace(sound.Id)) sound.Id = Guid.NewGuid().ToString("N");
 
             sound.Name = OrEmpty(sound.Name);
             sound.FilePath = sound.FilePath.Trim();
             sound.Hotkey = OrNew(sound.Hotkey);
             sound.Volume = Clamp01(sound.Volume);
-            sounds.Add(sound);
         }
 
-        config.Sounds = sounds;
-        config.OutputDevices = ValidateDevices(config.OutputDevices);
-        config.InputDevices = ValidateDevices(config.InputDevices);
+        ValidateDevices(config.OutputDevices);
+        ValidateDevices(config.InputDevices);
 
         return config;
     }
 
-    private static List<AudioDeviceRef> ValidateDevices(List<AudioDeviceRef> devices)
+    private static void ValidateDevices(List<AudioDeviceRef> devices)
     {
-        var kept = new List<AudioDeviceRef>(devices.Count);
+        // DeviceService matches on endpoint id and falls back to the friendly name. With
+        // neither, the entry can never resolve and would sit in the device list as a
+        // nameless row that permanently reports itself as missing.
+        devices.RemoveAll(d => d is null
+            || (string.IsNullOrWhiteSpace(d.Id) && string.IsNullOrWhiteSpace(d.FriendlyName)));
 
         foreach (var device in devices)
         {
-            if (device is null) continue;
-
-            // DeviceService matches on endpoint id and falls back to the friendly name.
-            // With neither, the entry can never resolve and would sit in the device list
-            // as a nameless row that permanently reports itself as missing.
-            if (string.IsNullOrWhiteSpace(device.Id) && string.IsNullOrWhiteSpace(device.FriendlyName)) continue;
-
             device.Id = OrEmpty(device.Id);
             device.FriendlyName = OrEmpty(device.FriendlyName);
             device.Volume = Clamp01(device.Volume);
-            kept.Add(device);
         }
-
-        return kept;
     }
 
     /// <summary>

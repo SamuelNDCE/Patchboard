@@ -44,13 +44,44 @@ Per output device the chain is:
 `AudioClientShareMode.Shared` is mandatory, not a preference. Exclusive mode seizes the
 device and would cut off Discord, the game, and everything else using it.
 
-NAudio 3.0 notes, verified against the installed assembly on 2026-09-02, not from docs:
-- The package is split. `NAudio.Wasapi` holds `WasapiOut`, `WasapiCapture`,
+NAudio 3.0.1 notes, verified against the installed assembly on 2026-09-02, not from docs:
+- The package is split. `NAudio.Wasapi` holds the WASAPI players, `WasapiCapture` and
   `MMDeviceEnumerator`. `NAudio.Core` holds the sample providers.
 - `MediaFoundationResampler` is NOT present in 3.0.1. Use `WdlResamplingSampleProvider`.
   Any guide telling you otherwise is written for NAudio 2.x.
-- `WasapiOut(MMDevice, AudioClientShareMode, bool useEventSync, int latencyMs)` is the
-  constructor that targets a specific device.
+- `ISampleProvider.Read` takes a `Span<float>` and `IWaveProvider.Read` a `Span<byte>`.
+  The 2.x `(buffer, offset, count)` signature is gone, so every custom provider differs
+  from every tutorial you will find.
+- **`WasapiOut` is `[Obsolete]`.** Build outputs with `WasapiPlayerBuilder`, which returns
+  a `WasapiPlayer`. It adds MMCSS thread priority and IAudioClient3 low latency, and it
+  exposes `IsFormatSupported` so the endpoint can be asked what it accepts rather than
+  guessed at.
+
+## Never touch the system volume
+
+`WasapiOut.Volume`, and `WasapiPlayer.DeviceVolume`, write the **system-wide endpoint
+volume**. Setting either changes the user's Windows audio settings for every application,
+which this project is explicitly forbidden from doing. All gain in Patchboard is applied
+inside our own mix, in `CachedSoundSampleProvider.Volume` and `OutputChannel.Volume`.
+`WasapiPlayer` also offers `SessionVolume` and `StreamVolume`, which are per-stream and
+safe, but the mix already handles it and adding a second place to set gain would only
+create a way for the two to disagree.
+
+## Known limits, deliberately accepted
+
+- **The outputs will drift apart over time.** Every endpoint has its own crystal, so two
+  devices playing the same clip diverge at a rate no start ordering can fix. Windows
+  offers `IAudioClockAdjustment::SetSampleRate` for apps that must stay locked. Soundboard
+  clips are seconds long, so the drift is inaudible and correcting it is not worth the
+  complexity. Revisit only if long music beds become a real use case.
+- **Start skew between devices is roughly one buffer period** plus thread scheduling,
+  because each stream starts on its own engine period boundary. At the default 60ms
+  buffer that is under a frame of video, and unnoticeable for a sound effect.
+- Endpoint IDs survive reboots and USB replug but **change on driver update or device
+  reinstall**, which is why `DeviceService.Resolve` falls back to the friendly name.
+  Windows 11 24H2 added `PKEY_AudioEndpoint_StableId`, which is genuinely stable, but
+  NAudio exposes no constant for it. Reading it would mean declaring the PropertyKey by
+  hand, and not every endpoint has one. Not worth it until a device actually goes missing.
 
 ## Device identity
 
