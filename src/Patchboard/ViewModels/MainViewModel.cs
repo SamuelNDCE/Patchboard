@@ -76,6 +76,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ImportFolderCommand = new RelayCommand(ImportFolder);
         UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
         UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
+        MuteMicCommand = new RelayCommand(MuteMic);
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
         ColumnsUpCommand = new RelayCommand(() => GridColumns++);
@@ -127,6 +128,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand ImportFolderCommand { get; }
     public RelayCommand UseDefaultOutputCommand { get; }
     public RelayCommand UseCableOutputCommand { get; }
+    public RelayCommand MuteMicCommand { get; }
     public RelayCommand ToggleSettingsCommand { get; }
     public RelayCommand ClearSearchCommand { get; }
     public RelayCommand ColumnsUpCommand { get; }
@@ -245,15 +247,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void RefreshDevices()
     {
-        Merge(Outputs, _deviceService.ListOutputs(), _config.OutputDevices, OnOutputChanged);
-        Merge(Inputs, _deviceService.ListInputs(), _config.InputDevices, OnInputChanged);
+        Merge(Outputs, _deviceService.ListOutputs(), _config.OutputDevices, OnOutputChanged, isOutput: true);
+        foreach (var output in Outputs) output.MicRoutingChanged += OnMicRoutingChanged;
+        Merge(Inputs, _deviceService.ListInputs(), _config.InputDevices, OnInputChanged, isOutput: false);
     }
 
     private static void Merge(
         ObservableCollection<DeviceViewModel> target,
         IReadOnlyList<AudioDeviceInfo> live,
         List<AudioDeviceRef> saved,
-        Action<DeviceViewModel> onChanged)
+        Action<DeviceViewModel> onChanged,
+        bool isOutput)
     {
         target.Clear();
 
@@ -269,7 +273,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             // The name may have changed since it was saved. Keep the display current.
             reference.FriendlyName = info.FriendlyName;
 
-            var vm = new DeviceViewModel(info, reference);
+            var vm = new DeviceViewModel(info, reference) { IsOutput = isOutput };
             vm.EnabledChanged += onChanged;
             vm.VolumeChanged += onChanged;
             target.Add(vm);
@@ -279,7 +283,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // device that is gone is just noise.
         foreach (var reference in saved.Where(s => s.Enabled && live.All(l => l.Id != s.Id)))
         {
-            var vm = new DeviceViewModel(null, reference);
+            var vm = new DeviceViewModel(null, reference) { IsOutput = isOutput };
             vm.EnabledChanged += onChanged;
             vm.VolumeChanged += onChanged;
             target.Add(vm);
@@ -303,6 +307,67 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         NotifyOutputState();
         Save();
     }
+
+    private void OnMicRoutingChanged(DeviceViewModel vm)
+    {
+        _engine.SetMicRouting(vm.Id, vm.ReceivesMic);
+        NotifyOutputState();
+        Save();
+    }
+
+    /// <summary>
+    /// Kill the microphone everywhere, immediately.
+    ///
+    /// This is the panic button. Feedback builds fast and gets loud, and hunting for the
+    /// right checkbox while it howls is not a reasonable thing to ask of anyone.
+    /// </summary>
+    private void MuteMic()
+    {
+        MicEnabled = false;
+        Status = "Microphone off. Your voice is no longer going anywhere.";
+    }
+
+    /// <summary>
+    /// A capture device and an output device that are two ends of the same virtual cable.
+    ///
+    /// Recording the far end of a cable you are playing into feeds the signal round and
+    /// round with no acoustic gap to damp it, which is louder and faster than ordinary
+    /// speaker feedback. Named pairs only: guessing at another app's internal routing
+    /// would produce false alarms, so this reports what it can actually prove.
+    /// </summary>
+    public string? LoopWarning
+    {
+        get
+        {
+            if (!_config.MicPassthroughEnabled) return null;
+
+            var sending = Outputs.Where(o => o.IsEnabled && o.ReceivesMic).Select(o => o.FriendlyName).ToList();
+            if (sending.Count == 0) return null;
+
+            var capturing = Inputs.Where(i => i.IsEnabled).Select(i => i.FriendlyName).ToList();
+
+            foreach (var output in sending)
+            {
+                var pair = output switch
+                {
+                    var n when n.StartsWith("CABLE In", StringComparison.OrdinalIgnoreCase) => "CABLE Output",
+                    var n when n.Contains("Voicemeeter", StringComparison.OrdinalIgnoreCase)
+                               && n.Contains("Input", StringComparison.OrdinalIgnoreCase) => "Voicemeeter Out",
+                    _ => null,
+                };
+
+                if (pair is null) continue;
+
+                var offender = capturing.FirstOrDefault(c => c.StartsWith(pair, StringComparison.OrdinalIgnoreCase));
+                if (offender is not null)
+                    return $"Feedback loop: you are sending the mic to {output} while also recording {offender}. Untick one.";
+            }
+
+            return null;
+        }
+    }
+
+    public bool HasLoopWarning => LoopWarning is not null;
 
     /// <summary>Tick one output on the user's behalf, from the banner's shortcut buttons.</summary>
     private void EnableOutput(DeviceViewModel? device)
@@ -355,8 +420,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// the sounds go. Worth saying out loud, because if that output is his headphones he
     /// will hear himself, and if VoiceMeeter is already routing the mic he goes out twice.
     /// </summary>
-    public bool MicIsLive => _config.MicPassthroughEnabled && !HasNoOutput
-                             && _config.InputDevices.Any(i => i.Enabled);
+    public bool MicIsLive => _config.MicPassthroughEnabled
+                             && _config.InputDevices.Any(i => i.Enabled)
+                             && Outputs.Any(o => o.IsEnabled && o.ReceivesMic);
 
     private void NotifyOutputState()
     {
@@ -365,6 +431,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(DefaultOutputName));
         OnPropertyChanged(nameof(HasCableOutput));
         OnPropertyChanged(nameof(VoiceRouteName));
+        OnPropertyChanged(nameof(LoopWarning));
+        OnPropertyChanged(nameof(HasLoopWarning));
         OnPropertyChanged(nameof(MicIsLive));
     }
 

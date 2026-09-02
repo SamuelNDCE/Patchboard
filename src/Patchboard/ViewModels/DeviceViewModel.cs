@@ -16,6 +16,7 @@ public sealed class DeviceViewModel : ObservableObject
     private bool _isEnabled;
     private float _volume = 1f;
     private float _peak;
+    private bool _receivesMic;
 
     public DeviceViewModel(AudioDeviceInfo? info, AudioDeviceRef reference)
     {
@@ -23,7 +24,11 @@ public sealed class DeviceViewModel : ObservableObject
         Reference = reference;
         _isEnabled = reference.Enabled;
         _volume = reference.Volume;
+        _receivesMic = reference.ReceivesMic;
     }
+
+    /// <summary>True for a playback device. Only outputs can be sent the microphone.</summary>
+    public bool IsOutput { get; init; }
 
     public AudioDeviceInfo? Info { get; }
 
@@ -93,6 +98,45 @@ public sealed class DeviceViewModel : ObservableObject
         get => _peak;
         set => Set(ref _peak, value);
     }
+
+    /// <summary>
+    /// Output devices only: send the live microphone here as well as the sounds.
+    ///
+    /// Off by default on every device. Turning it on for something audible in the room is
+    /// how you get feedback, so the UI warns rather than assuming.
+    /// </summary>
+    public bool ReceivesMic
+    {
+        get => _receivesMic;
+        set
+        {
+            if (!Set(ref _receivesMic, value)) return;
+            Reference.ReceivesMic = value;
+            OnPropertyChanged(nameof(FeedbackRisk));
+            OnPropertyChanged(nameof(HasFeedbackRisk));
+            MicRoutingChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>
+    /// Warning shown when sending the mic here is likely to howl.
+    ///
+    /// Real hardware is the obvious case: your voice comes out of the speakers next to
+    /// the microphone. The subtler case is a virtual device that is itself routed back to
+    /// speakers, which is what Samuel's "Voicemeeter Input" does through bus A1. We cannot
+    /// read another app's routing, so the wording says what to check rather than claiming
+    /// to know.
+    /// </summary>
+    public string? FeedbackRisk => !_receivesMic ? null : Info switch
+    {
+        { IsVirtual: false } => "You will hear yourself, and your mic will pick that up again",
+        { IsVirtual: true } => "Safe only if this route does not come back out of your speakers",
+        _ => null,
+    };
+
+    public bool HasFeedbackRisk => FeedbackRisk is not null;
+
+    public event Action<DeviceViewModel>? MicRoutingChanged;
 
     /// <summary>
     /// What Discord, OBS or a game must be set to listen on for this route to reach anyone.

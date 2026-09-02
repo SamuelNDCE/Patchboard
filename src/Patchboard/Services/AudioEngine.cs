@@ -18,6 +18,12 @@ internal sealed class OutputChannel : IDisposable
     /// <summary>Per-device gain from the UI, 0.0 to 1.0.</summary>
     public float Volume { get; set; } = 1f;
 
+    /// <summary>
+    /// Whether the live microphone is mixed into this device. Off unless the user asked
+    /// for it, because sending the mic somewhere audible feeds back.
+    /// </summary>
+    public bool ReceivesMic { get; set; }
+
     /// <summary>Live microphone fan-out sink for this device, when passthrough is on.</summary>
     public BufferedWaveProvider? MicSink { get; set; }
 
@@ -191,7 +197,37 @@ public sealed class AudioEngine : IDisposable
             Output = output,
             Mixer = mixer,
             Volume = Math.Clamp(reference.Volume, 0f, 1f),
+            ReceivesMic = reference.ReceivesMic,
         };
+    }
+
+    /// <summary>Turn the microphone on or off for a single output device.</summary>
+    public void SetMicRouting(string deviceId, bool receivesMic)
+    {
+        lock (Gate)
+        {
+            var channel = _channels.FirstOrDefault(c => c.DeviceId == deviceId);
+            if (channel is null) return;
+
+            channel.ReceivesMic = receivesMic;
+
+            if (!receivesMic)
+            {
+                // Clearing the buffer stops the tail of already captured audio from
+                // trickling out after the user has asked for it to stop.
+                channel.MicSink?.ClearBuffer();
+                channel.MicSink = null;
+                return;
+            }
+
+            if (_micEnabled) AttachMicSinks();
+        }
+    }
+
+    /// <summary>True when at least one output is carrying the microphone right now.</summary>
+    public bool AnyChannelReceivesMic
+    {
+        get { lock (Gate) { return _micEnabled && _channels.Any(c => c.ReceivesMic); } }
     }
 
     /// <summary>Update one device's gain, including on sounds already playing.</summary>
@@ -304,6 +340,9 @@ public sealed class AudioEngine : IDisposable
     {
         foreach (var channel in _channels)
         {
+            // The safety check. A channel the user did not opt in stays mic free, so a
+            // device they can hear cannot start a feedback loop on its own.
+            if (!channel.ReceivesMic) continue;
             if (channel.MicSink is not null) continue;
 
             var sink = new BufferedWaveProvider(AudioFormat.Mix, TimeSpan.FromMilliseconds(500))

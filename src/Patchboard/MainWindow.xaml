@@ -76,6 +76,43 @@
                             </TextBlock>
                         </Grid>
 
+                        <!-- Send the mic here too. Output rows only, and only while
+                             passthrough is on. Off by default on every device, because
+                             the mic reaching anything audible is what causes feedback. -->
+                        <StackPanel Margin="0,7,0,0">
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding IsOutput}" Value="True" />
+                                                <Condition Binding="{Binding DataContext.MicEnabled,
+                                                                     RelativeSource={RelativeSource AncestorType=Window}}"
+                                                           Value="True" />
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+
+                            <CheckBox Style="{StaticResource DeviceCheck}"
+                                      IsChecked="{Binding ReceivesMic, Mode=TwoWay}"
+                                      AutomationProperties.Name="{Binding FriendlyName, StringFormat='Send my mic to {0}'}">
+                                <TextBlock Text="send my mic here"
+                                           FontSize="11"
+                                           Foreground="{StaticResource TextDimBrush}" />
+                            </CheckBox>
+
+                            <TextBlock Text="{Binding FeedbackRisk}"
+                                       FontSize="10"
+                                       Foreground="{StaticResource DangerBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="24,3,0,0"
+                                       Visibility="{Binding HasFeedbackRisk, Converter={StaticResource BoolToVis}}" />
+                        </StackPanel>
+
                         <!-- Half a route is silent. Say what the other end must be set to. -->
                         <TextBlock Text="{Binding ListenHint}"
                                    FontSize="10"
@@ -157,9 +194,25 @@
                                    Margin="0,0,0,12"
                                    Text="Sends your voice to the same outputs as the sounds. Leave this off if VoiceMeeter already routes your mic, or people will hear you twice." />
 
+                        <!-- Dimmed when passthrough is off, never disabled. Disabling the
+                             rows made it impossible to untick a microphone after turning
+                             the mic off, so a bad selection stayed in the config and came
+                             straight back the moment passthrough was switched on again. -->
                         <ItemsControl ItemsSource="{Binding Inputs}"
-                                      ItemTemplate="{StaticResource DeviceRow}"
-                                      IsEnabled="{Binding MicEnabled}" />
+                                      ItemTemplate="{StaticResource DeviceRow}">
+                            <ItemsControl.Style>
+                                <Style TargetType="ItemsControl">
+                                    <Setter Property="Opacity" Value="1" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding DataContext.MicEnabled,
+                                                              RelativeSource={RelativeSource AncestorType=Window}}"
+                                                     Value="False">
+                                            <Setter Property="Opacity" Value="0.55" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ItemsControl.Style>
+                        </ItemsControl>
                     </StackPanel>
                 </ScrollViewer>
             </Border>
@@ -227,6 +280,15 @@
                                     Content="Add sounds"
                                     Margin="0,0,8,0" />
 
+                            <!-- The panic button. Feedback gets loud fast, and hunting for
+                                 the right checkbox while it howls is not reasonable. -->
+                            <Button Style="{StaticResource DangerButton}"
+                                    Command="{Binding MuteMicCommand}"
+                                    Content="Mute mic"
+                                    Margin="0,0,8,0"
+                                    Visibility="{Binding MicIsLive, Converter={StaticResource BoolToVis}}"
+                                    ToolTip="Stop sending your microphone anywhere, right now" />
+
                             <Button Style="{StaticResource DangerButton}"
                                     Command="{Binding StopAllCommand}"
                                     Content="Stop all"
@@ -237,6 +299,35 @@
                                     Command="{Binding ToggleSettingsCommand}"
                                     Content="Settings" />
                         </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- A direct electrical loop, distinct from acoustic feedback: the mic is
+                     going into one end of a cable that is also being recorded. -->
+                <Border Grid.Row="1"
+                        Background="#1A0F0F"
+                        BorderBrush="{StaticResource DangerBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="16,12"
+                        Panel.ZIndex="2"
+                        Visibility="{Binding HasLoopWarning, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding LoopWarning}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource DangerBrush}"
+                                   TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                Style="{StaticResource DangerButton}"
+                                Command="{Binding MuteMicCommand}"
+                                Content="Mute mic"
+                                Margin="12,0,0,0" />
                     </Grid>
                 </Border>
 

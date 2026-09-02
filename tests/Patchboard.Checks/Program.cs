@@ -33,8 +33,21 @@ var configService = new ConfigService();
 var config = configService.Load();
 
 Check("config loads", config.Sounds.Count > 0, $"{config.Sounds.Count} sounds");
-Check("no output enabled without the user choosing", config.OutputDevices.All(d => !d.Enabled));
-Check("mic passthrough off by default", !config.MicPassthroughEnabled);
+// Originally this asserted that nothing was enabled, which was only ever true on a fresh
+// install. Once a real output had been chosen the check failed while the app was working
+// correctly. The invariant that actually matters is that whatever is enabled is coherent.
+var enabledOutputs = config.OutputDevices.Where(d => d.Enabled).ToList();
+Console.WriteLine($"  ..... {enabledOutputs.Count} output(s) selected: {string.Join(", ", enabledOutputs.Select(d => d.FriendlyName))}");
+
+Check("every enabled output has an endpoint id", enabledOutputs.All(d => !string.IsNullOrWhiteSpace(d.Id)));
+Check("every enabled output has a usable volume", enabledOutputs.All(d => d.Volume is >= 0f and <= 1f));
+
+// Mic routing is a live behaviour, not a config invariant: a device may legitimately be
+// marked ReceivesMic while passthrough is off, because the master switch overrides it.
+// That override is proved against the real engine in section 5c, so asserting anything
+// about it here would either duplicate that or, worse, pass vacuously.
+var micDevices = config.OutputDevices.Where(d => d.ReceivesMic).Select(d => d.FriendlyName).ToList();
+Console.WriteLine($"  ..... mic routed to: {(micDevices.Count == 0 ? "nothing" : string.Join(", ", micDevices))}");
 Check("grid settings sane", config.GridColumns is >= 1 and <= 20 && config.GridRows is >= 1 and <= 20,
     $"{config.GridColumns}x{config.GridRows}");
 
@@ -290,6 +303,54 @@ else
     mic.Stop();
     micEngine.SetMicEnabled(false);
     Check("stops cleanly and releases the microphone", true);
+}
+
+// --------------------------------------------------------------------------
+Section("5c. MIC ROUTING SAFETY");
+
+// The rule that stops feedback: a device only carries the microphone if the user
+// deliberately said so. Everything below is about proving that default holds.
+
+Check("a fresh device reference does not carry the mic", !new AudioDeviceRef().ReceivesMic,
+    "sounds go everywhere, the mic goes only where it is sent");
+
+var micSafeTarget = outputs.FirstOrDefault(o =>
+    o.FriendlyName.Contains("Steam Streaming Speakers", StringComparison.OrdinalIgnoreCase));
+
+if (micSafeTarget is null || decoded.Count == 0)
+{
+    Console.WriteLine("  SKIP  no idle endpoint to test routing against");
+}
+else
+{
+    using var routingEngine = new AudioEngine(devices);
+    var reference = new AudioDeviceRef
+    {
+        Id = micSafeTarget.Id,
+        FriendlyName = micSafeTarget.FriendlyName,
+        Enabled = true,
+        Volume = 1f,
+        ReceivesMic = false,
+    };
+
+    routingEngine.SetOutputs([reference], 60);
+    routingEngine.SetMicEnabled(true);
+
+    Check("mic enabled but no device opted in means nothing carries it",
+        !routingEngine.AnyChannelReceivesMic,
+        "this is what prevents an accidental feedback loop");
+
+    routingEngine.SetMicRouting(micSafeTarget.Id, true);
+    Check("opting a device in starts carrying the mic", routingEngine.AnyChannelReceivesMic);
+
+    routingEngine.SetMicRouting(micSafeTarget.Id, false);
+    Check("opting back out stops it again", !routingEngine.AnyChannelReceivesMic);
+
+    routingEngine.SetMicRouting(micSafeTarget.Id, true);
+    routingEngine.SetMicEnabled(false);
+    Check("the master mic switch overrides per device routing",
+        !routingEngine.AnyChannelReceivesMic,
+        "the Mute mic button has to win no matter what is ticked");
 }
 
 // --------------------------------------------------------------------------

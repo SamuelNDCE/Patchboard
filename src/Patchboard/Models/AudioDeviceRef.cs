@@ -21,4 +21,17 @@ public sealed class AudioDeviceRef
 
     /// <summary>0.0 to 1.0. Applied inside our own mix, never to the Windows device volume.</summary>
     public float Volume { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Output devices only: whether the live microphone is mixed into this device as well
+    /// as the sounds.
+    ///
+    /// Defaults to false, and that default is the safety property. Sending the microphone
+    /// to a device the user can hear creates an acoustic feedback loop: voice goes to the
+    /// speakers, the speakers reach the microphone, and it builds. Samuel hit exactly this,
+    /// because his "Voicemeeter Input" strip is routed to A1 and therefore to his monitor
+    /// speakers. Sounds go everywhere by default; the microphone goes only where it is
+    /// deliberately sent.
+    /// </summary>
+    public bool ReceivesMic { get; set; }
 }
