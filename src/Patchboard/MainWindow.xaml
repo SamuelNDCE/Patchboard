@@ -42,8 +42,47 @@
                 <Grid Margin="24,7,0,0"
                       Visibility="{Binding IsEnabled, Converter={StaticResource BoolToVis}}">
                     <StackPanel>
-                        <Slider Style="{StaticResource ThinSlider}"
-                                Value="{Binding Volume, Mode=TwoWay}" />
+                        <!-- The number matters. A slider alone hid a device sitting at 6%,
+                             which looked exactly like a routing failure. -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <Slider Grid.Column="0"
+                                    Style="{StaticResource ThinSlider}"
+                                    Value="{Binding Volume, Mode=TwoWay}" />
+
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Volume, StringFormat={}{0:P0}}"
+                                       FontSize="10"
+                                       Width="34"
+                                       TextAlignment="Right"
+                                       VerticalAlignment="Center"
+                                       Margin="6,0,0,0">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}" />
+                                        <Style.Triggers>
+                                            <!-- Turned down far enough to be mistaken for broken. -->
+                                            <DataTrigger Binding="{Binding IsQuiet}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+
+                        <!-- Half a route is silent. Say what the other end must be set to. -->
+                        <TextBlock Text="{Binding ListenHint}"
+                                   FontSize="10"
+                                   Foreground="#7A7A7A"
+                                   TextWrapping="Wrap"
+                                   Margin="0,5,0,0"
+                                   Visibility="{Binding HasListenHint, Converter={StaticResource BoolToVis}}" />
 
                         <!-- Level meter. A plain bar rather than a ProgressBar: at two
                              pixels tall the control chrome costs more than it gives. -->

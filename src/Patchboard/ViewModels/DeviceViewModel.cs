@@ -59,6 +59,7 @@ public sealed class DeviceViewModel : ObservableObject
         {
             if (!Set(ref _isEnabled, value)) return;
             Reference.Enabled = value;
+            OnPropertyChanged(nameof(IsQuiet));
             EnabledChanged?.Invoke(this);
         }
     }
@@ -72,9 +73,19 @@ public sealed class DeviceViewModel : ObservableObject
             var clamped = Math.Clamp(value, 0f, 1f);
             if (!Set(ref _volume, clamped)) return;
             Reference.Volume = clamped;
+            OnPropertyChanged(nameof(IsQuiet));
             VolumeChanged?.Invoke(this);
         }
     }
+
+    /// <summary>
+    /// Turned down far enough that the device looks broken rather than quiet.
+    ///
+    /// This is a real failure mode, not a hypothetical: a device left at 6% read as "the
+    /// soundboard does not work", because a thin slider near its left end is hard to tell
+    /// from one at any other low value.
+    /// </summary>
+    public bool IsQuiet => _isEnabled && _volume < 0.15f;
 
     /// <summary>Live level, 0 to 1, refreshed on a timer.</summary>
     public float Peak
@@ -82,6 +93,30 @@ public sealed class DeviceViewModel : ObservableObject
         get => _peak;
         set => Set(ref _peak, value);
     }
+
+    /// <summary>
+    /// What Discord, OBS or a game must be set to listen on for this route to reach anyone.
+    ///
+    /// Picking the send side is only half a route, and getting it wrong is silent: the app
+    /// happily plays into a cable whose other end nothing is reading. That is exactly what
+    /// happened with CABLE Input on a machine where VoiceMeeter, not VB-Cable, carries the
+    /// microphone. Null for real hardware, where the question does not arise.
+    /// </summary>
+    public string? ListenHint => FriendlyName switch
+    {
+        var n when n.StartsWith("CABLE Input", StringComparison.OrdinalIgnoreCase)
+            => "Others hear this only if their mic is set to CABLE Output",
+        var n when n.StartsWith("CABLE In 16ch", StringComparison.OrdinalIgnoreCase)
+            => "Others hear this only if their mic is set to CABLE Output",
+        var n when n.Contains("Voicemeeter", StringComparison.OrdinalIgnoreCase)
+                   && n.Contains("Input", StringComparison.OrdinalIgnoreCase)
+            => "Others hear this on Voicemeeter Out B1, B2 or B3, if that strip is routed to B",
+        var n when n.Contains("Steam Streaming", StringComparison.OrdinalIgnoreCase)
+            => "Only reaches Steam Remote Play, not Discord or a game",
+        _ => null,
+    };
+
+    public bool HasListenHint => ListenHint is not null;
 
     public event Action<DeviceViewModel>? EnabledChanged;
 
