@@ -21,6 +21,9 @@ public sealed class ConfigService
     private const int MinLatencyMs = 20;
     private const int MaxLatencyMs = 500;
 
+    /// <summary>Longest lead in worth allowing. Past a couple of seconds it reads as broken.</summary>
+    private const int MaxDelayMs = 5000;
+
     /// <summary>Give up looking for a free quarantine slot after this many tries.</summary>
     private const int MaxQuarantineSlots = 999;
 
@@ -308,6 +311,7 @@ public sealed class ConfigService
         config.GridRows = Math.Clamp(config.GridRows, 1, MaxGridSide);
         config.LatencyMs = Math.Clamp(config.LatencyMs, MinLatencyMs, MaxLatencyMs);
         config.MasterVolume = Clamp01(config.MasterVolume);
+        config.DefaultDelayMs = Math.Clamp(config.DefaultDelayMs, 0, MaxDelayMs);
 
         // Window size has to be a real number. Left and Top deliberately may not be:
         // NaN there means "never positioned, let Windows choose", and the restore checks
@@ -337,6 +341,12 @@ public sealed class ConfigService
             sound.Hotkey = OrNew(sound.Hotkey);
             // Sounds may be boosted above unity, unlike device and master gain.
             sound.Volume = Math.Clamp(sound.Volume, 0f, SoundButton.MaxVolume);
+
+            // Anything below the sentinel collapses to it, so a hand edited -5 means
+            // "follow the default" rather than a negative wait.
+            sound.DelayMs = sound.DelayMs < 0
+                ? SoundButton.UseDefaultDelay
+                : Math.Min(sound.DelayMs, MaxDelayMs);
         }
 
         ValidateDevices(config.OutputDevices);

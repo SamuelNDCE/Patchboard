@@ -546,10 +546,28 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public bool HasLoopWarning => LoopWarning is not null;
 
-    /// <summary>Tick one output on the user's behalf, from the banner's shortcut buttons.</summary>
+    /// <summary>
+    /// Tick one output on the user's behalf, from the banner's shortcut buttons.
+    ///
+    /// The microphone routing on that device is cleared first, and that is not tidiness.
+    /// The saved reference can carry ReceivesMic from an earlier session while the device
+    /// itself is switched off, so the flag sits there inert and invisible. Turning the
+    /// device on would then start sending the mic somewhere the user never asked for, in
+    /// the same click as the fix they did ask for.
+    ///
+    /// On this machine that combination is a closed loop rather than a nuisance: the
+    /// enabled inputs are Voicemeeter's own B buses, and the device this shortcut turns on
+    /// is Voicemeeter's virtual input, which feeds those same buses. Pressing "Add a cable"
+    /// would have howled.
+    ///
+    /// Someone who genuinely wants their voice on this device can still tick it, right
+    /// underneath, with the loop warning visible next to it.
+    /// </summary>
     private void EnableOutput(DeviceViewModel? device)
     {
         if (device is null) return;
+
+        if (device.ReceivesMic) device.ReceivesMic = false;
 
         // Setting IsEnabled runs the normal path: it updates the saved reference, reopens
         // the streams and persists, exactly as if the checkbox had been clicked.
@@ -709,6 +727,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var sound = await Decode(vm);
         if (sound is null) return;
 
+        if (!await WaitLeadIn(vm)) return;
+
         var handle = _engine.Play(vm.Id, sound, vm.Model.Volume, vm.Model.Retrigger,
             displayName: vm.DisplayName);
 
@@ -794,6 +814,73 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Wait out this button's lead in before it sounds.
+    ///
+    /// Returns false when the press was cancelled during the wait, which happens when the
+    /// same button is pressed again. Without that, a delayed button could not be called
+    /// back once triggered by mistake, and on a two second lead in that is a long time to
+    /// watch something you did not mean to do.
+    /// </summary>
+    private async Task<bool> WaitLeadIn(SoundButtonViewModel vm)
+    {
+        var delay = vm.Model.HasOwnDelay ? vm.Model.DelayMs : _config.DefaultDelayMs;
+        if (delay <= 0) return true;
+
+        // A second press while waiting cancels rather than queueing another copy.
+        if (_waiting.TryGetValue(vm.Id, out var inFlight))
+        {
+            inFlight.Cancel();
+            _waiting.Remove(vm.Id);
+            vm.IsWaiting = false;
+            Status = $"{vm.DisplayName} cancelled.";
+            return false;
+        }
+
+        var cancel = new CancellationTokenSource();
+        _waiting[vm.Id] = cancel;
+        vm.IsWaiting = true;
+
+        try
+        {
+            await Task.Delay(delay, cancel.Token).ConfigureAwait(true);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        finally
+        {
+            vm.IsWaiting = false;
+            if (_waiting.TryGetValue(vm.Id, out var mine) && ReferenceEquals(mine, cancel))
+                _waiting.Remove(vm.Id);
+            cancel.Dispose();
+        }
+    }
+
+    /// <summary>Presses currently waiting out a lead in, so a second press can cancel one.</summary>
+    private readonly Dictionary<string, CancellationTokenSource> _waiting = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Lead in used by buttons that do not set their own, in milliseconds.
+    /// </summary>
+    public int DefaultDelayMs
+    {
+        get => _config.DefaultDelayMs;
+        set
+        {
+            var clamped = Math.Clamp(value, 0, 5000);
+            if (_config.DefaultDelayMs == clamped) return;
+            _config.DefaultDelayMs = clamped;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DefaultDelayText));
+            Save();
+        }
+    }
+
+    public string DefaultDelayText => _config.DefaultDelayMs == 0 ? "off" : $"{_config.DefaultDelayMs} ms";
+
+    /// <summary>
     /// Longer than this and a clip is streamed from disk rather than held in memory.
     ///
     /// Two minutes of 48kHz stereo float is about 46MB. Below that, decoding is quick and
@@ -823,8 +910,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string CurrentName
     {
         get => _currentName;
-        private set => Set(ref _currentName, value);
+        private set
+        {
+            if (Set(ref _currentName, value)) OnPropertyChanged(nameof(CurrentNameOrIdle));
+        }
     }
+
+    /// <summary>
+    /// What the transport shows. The bar is always on screen, so it needs something to say
+    /// when nothing is playing; hiding it instead made the entire grid jump every time a
+    /// sound started or ended.
+    /// </summary>
+    public string CurrentNameOrIdle => _currentName.Length > 0 ? _currentName : "Nothing playing";
 
     /// <summary>
     /// Position through the playing clip, in seconds. Setting this seeks.
@@ -870,14 +967,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string CurrentPositionText => FormatTime(_currentPosition);
+    public string CurrentPositionText => TimeText.Clock(_currentPosition);
 
-    public string CurrentDurationText => FormatTime(_currentDuration);
-
-    private static string FormatTime(double seconds) =>
-        seconds >= 3600
-            ? TimeSpan.FromSeconds(seconds).ToString(@"h\:mm\:ss")
-            : TimeSpan.FromSeconds(seconds).ToString(@"m\:ss");
+    public string CurrentDurationText => TimeText.Clock(_currentDuration);
 
     /// <summary>
     /// Called while the seek bar is being dragged.

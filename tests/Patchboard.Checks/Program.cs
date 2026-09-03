@@ -1101,6 +1101,130 @@ Section("8i. LONG CLIPS PLAY, by streaming instead of decoding");
 }
 
 // --------------------------------------------------------------------------
+Section("8j. DURATIONS A PERSON CAN READ");
+
+// The trim panel showed "2950.0s long" for a 49 minute clip. Technically the length.
+Check("under a minute stays in seconds", TimeText.Words(15) == "15 seconds", TimeText.Words(15));
+Check("one second is singular", TimeText.Words(1) == "1 second", TimeText.Words(1));
+Check("a fraction of a second keeps its decimal", TimeText.Words(0.4) == "0.4 seconds", TimeText.Words(0.4));
+Check("ninety seconds is a minute and a half",
+    TimeText.Words(90) == "1 minute 30 seconds", TimeText.Words(90));
+Check("an exact minute drops the seconds", TimeText.Words(60) == "1 minute", TimeText.Words(60));
+Check("a 49 minute clip says so rather than 2950 seconds",
+    TimeText.Words(2950) == "49 minutes 10 seconds", TimeText.Words(2950));
+Check("over an hour reads in hours",
+    TimeText.Words(4256.9).StartsWith("1 hour"), TimeText.Words(4256.9));
+Check("nonsense does not produce nonsense",
+    TimeText.Words(double.NaN) == "0 seconds" && TimeText.Words(-5) == "0 seconds");
+
+// The clock form is for a readout that moves, so its shape must not jitter.
+Check("clock form is mm:ss", TimeText.Clock(90) == "1:30", TimeText.Clock(90));
+Check("clock form pads the seconds", TimeText.Clock(65) == "1:05", TimeText.Clock(65));
+Check("clock form grows to hours", TimeText.Clock(4256) == "1:10:56", TimeText.Clock(4256));
+
+// --------------------------------------------------------------------------
+Section("8k. THE LEAD IN BEFORE A SOUND PLAYS");
+
+{
+    var board = new AppConfig();
+    Check("a new board has no lead in", board.DefaultDelayMs == 0);
+
+    var button = new SoundButton { FilePath = @"C:\x\a.mp3" };
+    Check("a new button follows the board", !button.HasOwnDelay,
+        $"DelayMs {button.DelayMs}");
+
+    button.DelayMs = 250;
+    Check("a button can set its own", button.HasOwnDelay && button.DelayMs == 250);
+
+    button.DelayMs = SoundButton.UseDefaultDelay;
+    Check("and can be put back to following the board", !button.HasOwnDelay);
+
+    // A hand edited config must not produce a negative wait or an absurd one.
+    var wild = new AppConfig
+    {
+        DefaultDelayMs = 999_999,
+        Sounds = [new SoundButton { FilePath = @"C:\x\a.mp3", DelayMs = -20 },
+                  new SoundButton { FilePath = @"C:\x\b.mp3", DelayMs = 999_999 }],
+    };
+
+    var repairedPath = Path.Combine(ConfigService.ConfigDirectory, "config.json");
+    var hisRealConfig = File.Exists(repairedPath) ? File.ReadAllText(repairedPath) : null;
+    var rescue = Path.Combine(ConfigService.ConfigDirectory, "config.delay-rescue.json");
+    if (hisRealConfig is not null) File.WriteAllText(rescue, hisRealConfig);
+
+    try
+    {
+        new ConfigService().Save(wild);
+        var back = new ConfigService().Load();
+
+        Check("an absurd board default is clamped", back.DefaultDelayMs <= 5000,
+            $"{back.DefaultDelayMs} ms");
+        Check("a negative override collapses to 'follow the default'",
+            back.Sounds.Count == 2 && !back.Sounds[0].HasOwnDelay,
+            $"{back.Sounds[0].DelayMs}");
+        Check("an absurd override is clamped rather than obeyed",
+            back.Sounds[1].DelayMs <= 5000, $"{back.Sounds[1].DelayMs} ms");
+    }
+    finally
+    {
+        if (hisRealConfig is not null) File.WriteAllText(repairedPath, hisRealConfig);
+    }
+
+    var restoredOk = hisRealConfig is null || File.ReadAllText(repairedPath) == hisRealConfig;
+    Check("his own config was restored after the delay checks", restoredOk);
+    if (restoredOk && File.Exists(rescue)) { try { File.Delete(rescue); } catch (Exception) { } }
+}
+
+// --------------------------------------------------------------------------
+Section("8l. THE RANGE SLIDER'S HANDLES CANNOT CROSS");
+
+// Pure logic, no visual tree: the coercion is what stops a zero length trim window, and a
+// zero length window decodes to nothing and makes a button look broken rather than empty.
+// Constructing any WPF Control needs an STA thread, and a console harness is MTA, so this
+// section runs on its own STA thread and is joined before anything else continues. Without
+// it the whole run died on "The calling thread must be STA" at the first `new RangeSlider`.
+{
+    var staThread = new Thread(() =>
+    {
+    var slider = new Patchboard.Controls.RangeSlider
+    {
+        Minimum = 0, Maximum = 100, LowerValue = 20, UpperValue = 60, MinimumRange = 0.1,
+    };
+
+    Check("it holds the window it was given",
+        Math.Abs(slider.LowerValue - 20) < 0.001 && Math.Abs(slider.UpperValue - 60) < 0.001);
+
+    slider.LowerValue = 90;
+    Check("the start cannot be pushed past the end",
+        slider.LowerValue < slider.UpperValue,
+        $"lower {slider.LowerValue:0.00}, upper {slider.UpperValue:0.00}");
+
+    slider.UpperValue = 0;
+    Check("the end cannot be pushed past the start",
+        slider.UpperValue > slider.LowerValue,
+        $"lower {slider.LowerValue:0.00}, upper {slider.UpperValue:0.00}");
+
+    slider.LowerValue = -50;
+    slider.UpperValue = 500;
+    Check("both stay inside the track",
+        slider.LowerValue >= 0 && slider.UpperValue <= 100,
+        $"{slider.LowerValue:0.0} to {slider.UpperValue:0.0}");
+
+    // Shrinking the clip must drag the handles in with it, not strand them off the end.
+    slider.LowerValue = 10;
+    slider.UpperValue = 90;
+    slider.Maximum = 30;
+    Check("shortening the clip pulls the handles back onto it",
+        slider.UpperValue <= 30 && slider.LowerValue <= slider.UpperValue,
+        $"{slider.LowerValue:0.0} to {slider.UpperValue:0.0} of 30");
+    });
+
+    staThread.SetApartmentState(ApartmentState.STA);
+    staThread.Start();
+    staThread.Join();
+}
+
+// --------------------------------------------------------------------------
 Section("8g. BUTTON COLOUR, which was saved and bound but unreachable");
 
 {

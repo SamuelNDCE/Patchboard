@@ -40,6 +40,12 @@ public sealed class AppConfig
     /// <summary>WASAPI shared-mode buffer in milliseconds. Lower is snappier, riskier.</summary>
     public int LatencyMs { get; set; } = 60;
 
+    /// <summary>
+    /// Lead in before a sound starts, in milliseconds, for buttons that do not set their
+    /// own. Zero by default, because a soundboard should be instant unless told otherwise.
+    /// </summary>
+    public int DefaultDelayMs { get; set; }
+
     // Window placement. Restored on launch so the app comes back where it was left,
     // which matters here because it lives on a second monitor.
     public double WindowWidth { get; set; } = 1240;

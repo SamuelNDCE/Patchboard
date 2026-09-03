@@ -74,6 +74,24 @@ public sealed class SoundButton
     /// </summary>
     public string CacheKey => IsTrimmed ? $"{FilePath}|{StartMs}|{EndMs}" : FilePath;
 
+    /// <summary>
+    /// Wait this long before the sound starts, in milliseconds. -1 means use the board's
+    /// default.
+    ///
+    /// This is a lead in, not the audio buffer. It exists for push to talk: the key has to
+    /// be down and the channel open before the clip starts, or the first word is eaten.
+    /// How long that takes depends on the app on the other end, so it is a setting rather
+    /// than a constant, and it is per sound as well as global because a clip whose first
+    /// moment is silence needs less of it than one that opens on a shout.
+    /// </summary>
+    public int DelayMs { get; set; } = UseDefaultDelay;
+
+    /// <summary>Sentinel for "no override, follow the board's default".</summary>
+    public const int UseDefaultDelay = -1;
+
+    /// <summary>True when this button overrides the board's default delay.</summary>
+    public bool HasOwnDelay => DelayMs >= 0;
+
     public Hotkey Hotkey { get; set; } = new();
 
     /// <summary>Position in the grid. Buttons are laid out in this order.</summary>

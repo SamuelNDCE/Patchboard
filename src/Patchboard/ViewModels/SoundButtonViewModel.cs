@@ -10,6 +10,7 @@ public sealed class SoundButtonViewModel : ObservableObject
     private string? _problem;
     private string? _problemDetail;
     private bool _isLoading;
+    private bool _isWaiting;
 
     public SoundButtonViewModel(SoundButton model)
     {
@@ -100,7 +101,11 @@ public sealed class SoundButtonViewModel : ObservableObject
 
     public bool HasDuration => _durationSeconds > 0;
 
-    public string DurationText => _durationSeconds > 0 ? $"{_durationSeconds:0.0}s long" : "reading length...";
+    /// <summary>
+    /// The clip's length in words. A 49 minute clip used to read "2950.0s long", which is
+    /// the length and tells you nothing without doing the division yourself.
+    /// </summary>
+    public string DurationText => _durationSeconds > 0 ? TimeText.Words(_durationSeconds) : "reading length...";
 
     /// <summary>
     /// Read the clip's length so the sliders have a range.
@@ -195,17 +200,23 @@ public sealed class SoundButtonViewModel : ObservableObject
 
     public bool IsTrimmed => Model.IsTrimmed;
 
-    /// <summary>What the trim is doing, in words, under the sliders.</summary>
+    /// <summary>
+    /// What the trim is doing, under the track.
+    ///
+    /// Clock form for the two positions, because they are points on a timeline and read
+    /// straight off the handles. Words for the length kept, because that is the answer to
+    /// "how long will this button be" and is read once.
+    /// </summary>
     public string TrimText
     {
         get
         {
             if (!HasDuration) return "";
-            if (!Model.IsTrimmed) return $"Whole clip, {_durationSeconds:0.0}s";
+            if (!Model.IsTrimmed) return $"Whole clip, {TimeText.Words(_durationSeconds)}";
 
+            var start = Model.StartMs / 1000.0;
             var end = Model.EndMs > 0 ? Model.EndMs / 1000.0 : _durationSeconds;
-            var kept = end - Model.StartMs / 1000.0;
-            return $"{Model.StartMs / 1000.0:0.0}s to {end:0.0}s  ({kept:0.0}s of {_durationSeconds:0.0}s)";
+            return $"{TimeText.Clock(start)} to {TimeText.Clock(end)}  ({TimeText.Words(end - start)})";
         }
     }
 
@@ -307,6 +318,50 @@ public sealed class SoundButtonViewModel : ObservableObject
         get => _isLoading;
         set => Set(ref _isLoading, value);
     }
+
+    /// <summary>
+    /// Counting down this button's lead in before it sounds.
+    ///
+    /// Worth showing, because a button with a two second delay that gives no sign of having
+    /// been pressed is indistinguishable from one that ignored the click.
+    /// </summary>
+    public bool IsWaiting
+    {
+        get => _isWaiting;
+        set => Set(ref _isWaiting, value);
+    }
+
+    /// <summary>
+    /// This button's own lead in, in milliseconds, or -1 to follow the board's default.
+    /// </summary>
+    public int DelayMs
+    {
+        get => Model.DelayMs;
+        set
+        {
+            var clamped = value < 0 ? SoundButton.UseDefaultDelay : Math.Min(value, 5000);
+            if (Model.DelayMs == clamped) return;
+            Model.DelayMs = clamped;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(DelayText));
+            OnPropertyChanged(nameof(UsesOwnDelay));
+            DelayChanged?.Invoke(this);
+        }
+    }
+
+    public bool UsesOwnDelay => Model.HasOwnDelay;
+
+    public string DelayText => Model.HasOwnDelay
+        ? (Model.DelayMs == 0 ? "none" : $"{Model.DelayMs} ms")
+        : "board default";
+
+    public event Action<SoundButtonViewModel>? DelayChanged;
+
+    /// <summary>Go back to following the board's default lead in.</summary>
+    public RelayCommand UseDefaultDelayCommand => _useDefaultDelay ??=
+        new RelayCommand(() => DelayMs = SoundButton.UseDefaultDelay);
+
+    private RelayCommand? _useDefaultDelay;
 
     /// <summary>The full sentence behind <see cref="Problem"/>, for the tooltip.</summary>
     public string? ProblemDetail
