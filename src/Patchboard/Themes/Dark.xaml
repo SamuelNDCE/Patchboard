@@ -195,13 +195,18 @@
                                        Margin="8,14,8,10"
                                        ToolTip="{Binding DisplayName}" />
 
-                            <!-- Missing file: struck through rather than removed, so the
-                                 binding and hotkey survive and can be repointed. -->
+                            <!-- Unplayable: covered rather than removed, so the binding and
+                                 hotkey survive and can be repointed. The label says which
+                                 kind of broken it is, because "file missing" on a clip that
+                                 is merely too long sends the user hunting for nothing. -->
                             <Border Background="#99000000"
-                                    Visibility="{Binding FileMissing, Converter={StaticResource BoolToVis}}">
-                                <TextBlock Text="file missing"
+                                    ToolTip="{Binding ProblemDetail}"
+                                    Visibility="{Binding HasProblem, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{Binding Problem}"
                                            FontFamily="{StaticResource UiFont}"
                                            FontSize="11"
+                                           TextWrapping="Wrap"
+                                           TextAlignment="Center"
                                            Foreground="{StaticResource DangerBrush}"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center" />

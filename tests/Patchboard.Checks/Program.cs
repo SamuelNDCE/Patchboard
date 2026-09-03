@@ -2,6 +2,7 @@ using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using Patchboard.Models;
 using Patchboard.Services;
+using Patchboard.ViewModels;
 
 // Verification harness for Patchboard.
 //
@@ -486,10 +487,290 @@ else
 }
 
 // --------------------------------------------------------------------------
+Section("8. FOOTPRINT, so it stays lightweight while it runs");
+
+// The render thread reads every mixer input on every single buffer, so the number of
+// inputs is the per buffer cost of having the app open. It has to come back down.
+if (micSafeTarget is null)
+{
+    Console.WriteLine("  SKIP  no idle endpoint to measure mixer load against");
+}
+else
+{
+    using var loadEngine = new AudioEngine(devices);
+    var loadTarget = new AudioDeviceRef
+    {
+        Id = micSafeTarget.Id,
+        FriendlyName = micSafeTarget.FriendlyName,
+        Enabled = true,
+        Volume = 0f,
+        ReceivesMic = false,
+    };
+
+    loadEngine.SetOutputs([loadTarget], 60);
+    loadEngine.SetMicEnabled(true);
+
+    static int InputsOn(AudioEngine e, string id) =>
+        e.ReadMixerLoad().FirstOrDefault(m => m.DeviceId == id).MixerInputs;
+
+    Check("an idle device reads nothing per buffer", InputsOn(loadEngine, micSafeTarget.Id) == 0,
+        "no sounds playing and the mic not sent here");
+
+    for (var i = 0; i < 30; i++)
+    {
+        loadEngine.SetMicRouting(micSafeTarget.Id, true);
+        loadEngine.SetMicRouting(micSafeTarget.Id, false);
+    }
+
+    var afterToggling = InputsOn(loadEngine, micSafeTarget.Id);
+
+    // The regression this catches: the sink used to be dropped and rebuilt on every
+    // toggle, and NAudio cannot take a mixer input back out without the original
+    // provider instance, so each flick left one more dead reader wired in forever.
+    // Thirty flicks measured thirty of them.
+    Check("flicking the mic switch 30 times does not accumulate readers", afterToggling <= 1,
+        $"{afterToggling} mixer input(s), was 30 before the fix");
+
+    loadEngine.SetMicRouting(micSafeTarget.Id, true);
+    Check("the mic still reaches the device after all that", loadEngine.AnyChannelReceivesMic);
+
+    loadEngine.SetMicRouting(micSafeTarget.Id, false);
+    Check("and opting out still silences it", !loadEngine.AnyChannelReceivesMic);
+
+    if (decoded.Count > 0)
+    {
+        loadEngine.Play("footprint", decoded[0], 1f, RetriggerMode.Overlap);
+        var whilePlaying = InputsOn(loadEngine, micSafeTarget.Id);
+        loadEngine.StopAll();
+        Thread.Sleep(250);
+        var afterStopping = InputsOn(loadEngine, micSafeTarget.Id);
+
+        Check("a playing sound adds exactly one reader", whilePlaying == afterToggling + 1,
+            $"{afterToggling} idle, {whilePlaying} playing");
+        Check("a finished sound gives its reader back", afterStopping <= afterToggling,
+            $"back to {afterStopping}");
+    }
+}
+
+// The decoded audio cache. Unbounded, it reached 3.3GB against this library: 203
+// playable clips at 48kHz stereo float, none of it ever released.
+{
+    var budget = 4L * 1024 * 1024;
+    var cache = new SoundCache(budget);
+    var files = config.Sounds
+        .Where(x => File.Exists(x.FilePath))
+        .Select(x => x.FilePath)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+
+    if (files.Count < 3)
+    {
+        Console.WriteLine("  SKIP  not enough real files to exercise the cache");
+    }
+    else
+    {
+        var loaded = 0;
+        foreach (var file in files)
+        {
+            try { cache.GetOrLoad(file); loaded++; }
+            catch (Exception) { /* an unplayable clip is section 8b's problem, not this one */ }
+
+            if (cache.Bytes > budget) break;
+        }
+
+        Check("the cache never exceeds its budget", cache.Bytes <= budget,
+            $"{cache.Bytes / 1024 / 1024.0:0.0} MB of a {budget / 1024 / 1024} MB budget after {loaded} clips");
+        Check("it actually evicted rather than just fitting", cache.Evictions > 0 || cache.Count == loaded,
+            cache.Evictions > 0 ? $"{cache.Evictions} evicted" : "everything fit");
+
+        // Least recently used goes first, so the clips actually being pressed survive.
+        //
+        // The favourite has to be one of the SMALL clips. His library's first entry is a
+        // ten minute music track that decodes to 224MB, which is larger than any sensible
+        // budget and therefore takes the deliberate "hand it back without storing it"
+        // path. Picking it as the clip that should survive made this check fail against
+        // correct code, twice.
+        var bySize = files
+            .Select(f => (Path: f, Length: SafeLength(f)))
+            .Where(f => f.Length > 0)
+            .OrderBy(f => f.Length)
+            .ToList();
+
+        var roomy = 64L * 1024 * 1024;
+        var favourite = bySize[0].Path;
+
+        var lru = new SoundCache(roomy);
+        lru.GetOrLoad(favourite);
+        Check("a normal sized clip is actually cached", lru.Contains(favourite),
+            $"{Path.GetFileName(favourite)}, {lru.Bytes / 1024.0 / 1024:0.0} MB decoded");
+
+        var alsoLoaded = new List<string>();
+        foreach (var (file, _) in bySize.Skip(1))
+        {
+            lru.GetOrLoad(favourite);   // keep pressing the same button
+            try { lru.GetOrLoad(file); alsoLoaded.Add(file); } catch (Exception) { }
+            if (lru.Evictions > 0) break;
+        }
+
+        Check("eviction actually happened, so the next check means something",
+            lru.Evictions > 0, $"{lru.Evictions} evicted, {lru.Count} resident");
+        Check("the clip being pressed over and over is the one that survives",
+            lru.Contains(favourite), Path.GetFileName(favourite));
+        Check("it stayed inside the budget while doing that", lru.Bytes <= roomy,
+            $"{lru.Bytes / 1024 / 1024.0:0.0} MB of {roomy / 1024 / 1024} MB");
+
+        var cleared = new SoundCache(roomy);
+        cleared.GetOrLoad(favourite);
+        var residentBefore = cleared.Bytes;
+        cleared.Remove(favourite);
+        Check("removing a clip gives its memory back",
+            residentBefore > 0 && cleared.Bytes == 0 && !cleared.Contains(favourite),
+            $"{residentBefore / 1024 / 1024.0:0.0} MB released");
+
+        // A clip too big for the whole cache still plays; it is just never kept. Without
+        // this the cache would evict everything else to make room for something that has
+        // to be evicted itself on the very next load.
+        // The largest file on disk is not usable here: the three biggest in this library
+        // are hour long music rips that CachedSound refuses outright, so they never reach
+        // the cache at all. Take the largest clip that actually decodes.
+        var tiny = new SoundCache(1024);
+        var oversizeChecked = false;
+
+        foreach (var (candidate, _) in Enumerable.Reverse(bySize))
+        {
+            CachedSound stillPlays;
+            try { stillPlays = tiny.GetOrLoad(candidate); }
+            catch (Exception) { continue; }   // past the decode ceiling, not a cache matter
+
+            Check("a clip bigger than the whole budget still plays, unstored",
+                stillPlays.AudioData.Length > 0 && tiny.Bytes == 0 && !tiny.Contains(candidate),
+                Path.GetFileName(candidate));
+            oversizeChecked = true;
+            break;
+        }
+
+        if (!oversizeChecked)
+            Console.WriteLine("  SKIP  no decodable clip large enough to exceed a 1KB budget");
+    }
+}
+
+// --------------------------------------------------------------------------
+Section("8c. FIRST RUN, on a machine that has never saved anything");
+
+// AppConfig.WindowLeft and WindowTop are NaN until a window position has been recorded,
+// and System.Text.Json refuses to write NaN unless it is told to allow it. Every save on
+// a fresh install therefore threw, was caught, and became a status message: sounds,
+// devices and volumes silently failed to persist for the whole session, and were lost
+// outright if the window was closed while minimised. That is the state every downloaded
+// copy starts in, so it goes through the real ConfigService, not a copy of its options.
+Check("a brand new config really does start unpositioned",
+    double.IsNaN(new AppConfig().WindowLeft) && double.IsNaN(new AppConfig().WindowTop),
+    "NaN means let Windows choose");
+
+var freshPath = Path.Combine(ConfigService.ConfigDirectory, "config.json");
+var hisConfig = File.Exists(freshPath) ? File.ReadAllText(freshPath) : null;
+
+// These checks replace his real config with a blank one and put it back afterwards.
+// Holding the only copy in a local string means killing this process at the wrong moment
+// destroys a 206 sound library, so there is a copy on disk for the duration. It is
+// deleted only after the restore has been verified, which means a leftover file is
+// itself the signal that a run was interrupted.
+var rescuePath = Path.Combine(ConfigService.ConfigDirectory, "config.checks-rescue.json");
+if (hisConfig is not null) File.WriteAllText(rescuePath, hisConfig);
+
+try
+{
+    // Exactly what the app holds before it has ever been positioned.
+    new ConfigService().Save(new AppConfig());
+
+    var reloadedFresh = new ConfigService().Load();
+    Check("a fresh config can actually be saved", true,
+        "this threw before, so nothing persisted until the window was closed");
+    Check("and comes back still unpositioned", double.IsNaN(reloadedFresh.WindowLeft),
+        "the window restore tests for NaN, so it has to survive the round trip");
+
+    // A nonsense size or an infinite coordinate is repaired rather than handed to a window.
+    new ConfigService().Save(new AppConfig
+    {
+        WindowWidth = double.NaN,
+        WindowHeight = double.PositiveInfinity,
+        WindowLeft = double.NegativeInfinity,
+    });
+
+    var repaired = new ConfigService().Load();
+    Check("a non finite window size is repaired",
+        double.IsFinite(repaired.WindowWidth) && double.IsFinite(repaired.WindowHeight),
+        $"{repaired.WindowWidth} x {repaired.WindowHeight}");
+    Check("an infinite window position falls back to unpositioned",
+        double.IsNaN(repaired.WindowLeft));
+}
+catch (Exception ex)
+{
+    Check("a fresh config can actually be saved", false, $"{ex.GetType().Name}: {ex.Message}");
+}
+finally
+{
+    // Never leave his real settings replaced by a blank one.
+    if (hisConfig is not null) File.WriteAllText(freshPath, hisConfig);
+}
+
+var restored = hisConfig is null || File.ReadAllText(freshPath) == hisConfig;
+Check("his own config was restored after the first run checks", restored);
+
+if (restored && File.Exists(rescuePath))
+{
+    try { File.Delete(rescuePath); } catch (Exception) { }
+}
+else if (!restored)
+{
+    Console.WriteLine($"  KEPT  a copy of his config is at {rescuePath}");
+}
+
+// --------------------------------------------------------------------------
+Section("8b. A DEAD BUTTON SAYS WHY IT IS DEAD");
+
+Check("a genuinely missing file says so",
+    SoundButtonViewModel.DescribeProblem(new FileNotFoundException("gone", "x.mp3")) == "file missing");
+
+// Three of the imported buttons are hour long music rips. They are past the decode
+// ceiling, so they can never play, and every one of them used to report "file missing"
+// and send him looking for a file sitting exactly where he left it.
+var tooLong = new InvalidOperationException(
+    "'mix.mp3' is longer than 20 minutes. Trim it or use a shorter clip.");
+Check("a clip past the decode ceiling says it is too long, not missing",
+    SoundButtonViewModel.DescribeProblem(tooLong) == "too long",
+    SoundButtonViewModel.DescribeProblem(tooLong));
+
+Check("a silent file says it has no audio",
+    SoundButtonViewModel.DescribeProblem(
+        new InvalidOperationException("'x.mp3' decoded to zero audio.")) == "no audio");
+
+var absent = new SoundButtonViewModel(new SoundButton
+{
+    FilePath = Path.Combine(Path.GetTempPath(), "patchboard-not-here-" + Guid.NewGuid().ToString("N") + ".mp3"),
+    Name = "gone",
+});
+Check("a button whose file vanished is flagged on sight", absent.HasProblem && absent.Problem == "file missing");
+
+var presentFile = config.Sounds.FirstOrDefault(x => File.Exists(x.FilePath));
+if (presentFile is not null)
+{
+    var present = new SoundButtonViewModel(presentFile);
+    Check("a button whose file is there is not flagged", !present.HasProblem);
+}
+
+// --------------------------------------------------------------------------
 Console.WriteLine();
 Console.WriteLine(new string('-', 60));
 Console.WriteLine($"PASSED {pass}   FAILED {fail}");
 Console.WriteLine(new string('-', 60));
+
+
+static long SafeLength(string path)
+{
+    try { return new FileInfo(path).Length; }
+    catch (Exception) { return 0; }
+}
 
 /// <summary>Exercises the surround adapter, which is internal to the Patchboard assembly.</summary>
 file sealed class StereoToMultiChannelSampleProviderProbe

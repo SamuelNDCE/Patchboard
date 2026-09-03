@@ -24,7 +24,17 @@ internal sealed class OutputChannel : IDisposable
     /// </summary>
     public bool ReceivesMic { get; set; }
 
-    /// <summary>Live microphone fan-out sink for this device, when passthrough is on.</summary>
+    /// <summary>
+    /// Live microphone fan-out sink for this device.
+    ///
+    /// Created on the first opt-in and then kept for the life of the channel, including
+    /// while the mic is off. It has to be kept: NAudio's mixer has no way to take an
+    /// input back out without the exact provider instance that was added, so a sink that
+    /// was dropped and recreated on every toggle left the old one wired to the mixer
+    /// forever. Twenty flicks of the checkbox measured twenty dead inputs, each one still
+    /// read by the WASAPI render thread on every single buffer. One permanent sink per
+    /// device is both correct and cheaper.
+    /// </summary>
     public BufferedWaveProvider? MicSink { get; set; }
 
     public void Dispose()
@@ -220,9 +230,10 @@ public sealed class AudioEngine : IDisposable
             if (!receivesMic)
             {
                 // Clearing the buffer stops the tail of already captured audio from
-                // trickling out after the user has asked for it to stop.
+                // trickling out after the user has asked for it to stop. The sink itself
+                // stays wired to the mixer and simply goes quiet, because PushMicSamples
+                // now gates on ReceivesMic rather than on this being null.
                 channel.MicSink?.ClearBuffer();
-                channel.MicSink = null;
                 return;
             }
 
@@ -379,15 +390,10 @@ public sealed class AudioEngine : IDisposable
 
     private void DetachMicSinks()
     {
-        foreach (var channel in _channels)
-        {
-            if (channel.MicSink is null) continue;
-            channel.MicSink.ClearBuffer();
-            channel.MicSink = null;
-        }
-
-        // The mixer input is left in place feeding silence. Removing it would need the
-        // wrapped provider reference, and an idle buffered provider costs nothing.
+        // Drop whatever is already buffered so the last half second of voice cannot
+        // trickle out after the switch is off. The sinks stay wired to their mixers and
+        // feed silence; PushMicSamples stops filling them while _micEnabled is false.
+        foreach (var channel in _channels) channel.MicSink?.ClearBuffer();
     }
 
     /// <summary>
@@ -400,30 +406,64 @@ public sealed class AudioEngine : IDisposable
         {
             if (!_micEnabled) return;
             foreach (var channel in _channels)
+            {
+                // The sink outlives an opt-out, so this flag, not the sink's existence,
+                // is what decides whether a device currently carries the voice.
+                if (!channel.ReceivesMic) continue;
                 channel.MicSink?.AddSamples(pcmFloat32Stereo48k);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many providers each device's mixer reads on every buffer.
+    ///
+    /// This is the render thread's per buffer workload, and it is the number that catches
+    /// a leak: it should be the count of sounds currently playing, plus one if that device
+    /// has ever carried the mic, and it must come back down when they finish. A version of
+    /// this engine grew one permanent input per flick of a mic checkbox, which nothing
+    /// else observed.
+    /// </summary>
+    public IReadOnlyList<(string DeviceId, int MixerInputs)> ReadMixerLoad()
+    {
+        lock (Gate)
+        {
+            return _channels.Select(c => (c.DeviceId, c.Mixer.MixerInputs.Count())).ToList();
         }
     }
 
     /// <summary>Live output levels per device, for the meters in the device panel.</summary>
     public IReadOnlyList<(string DeviceId, float Peak)> ReadOutputPeaks()
     {
+        // Snapshot under the lock, then read the meters outside it.
+        //
+        // MasterPeakValue is a cross-apartment COM call and this runs on a 60ms UI timer,
+        // so holding Gate across it would park the microphone capture thread, which needs
+        // the same lock in PushMicSamples, several times a second. The capture thread must
+        // never wait on the UI for audio it has already recorded.
+        OutputChannel[] channels;
         lock (Gate)
         {
-            var peaks = new List<(string, float)>(_channels.Count);
-            foreach (var channel in _channels)
-            {
-                try
-                {
-                    peaks.Add((channel.DeviceId, channel.Device.AudioMeterInformation.MasterPeakValue));
-                }
-                catch (Exception)
-                {
-                    peaks.Add((channel.DeviceId, 0f));
-                }
-            }
-
-            return peaks;
+            channels = [.. _channels];
         }
+
+        var peaks = new List<(string, float)>(channels.Length);
+        foreach (var channel in channels)
+        {
+            try
+            {
+                peaks.Add((channel.DeviceId, channel.Device.AudioMeterInformation.MasterPeakValue));
+            }
+            catch (Exception)
+            {
+                // The channel can be disposed out from under us between the snapshot and
+                // the read, which surfaces as a COM failure on a dead object. Report no
+                // level rather than tearing down the meter for every other device.
+                peaks.Add((channel.DeviceId, 0f));
+            }
+        }
+
+        return peaks;
     }
 
     private static string Describe(Exception ex) => ex switch

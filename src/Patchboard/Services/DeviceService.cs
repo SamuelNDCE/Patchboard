@@ -51,7 +51,13 @@ public sealed class DeviceService : IDisposable
         }
 
         var results = new List<AudioDeviceInfo>();
-        foreach (var device in _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active))
+
+        // The collection is itself a COM object and is disposable. Leaving it to the
+        // finalizer leaks an endpoint enumeration on every device refresh, and the device
+        // list is rebuilt whenever hardware is plugged in or unplugged.
+        using var endpoints = _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active);
+
+        foreach (var device in endpoints)
         {
             try
             {
@@ -103,14 +109,25 @@ public sealed class DeviceService : IDisposable
 
         if (string.IsNullOrWhiteSpace(reference.FriendlyName)) return null;
 
-        foreach (var device in _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active))
+        using var endpoints = _enumerator.EnumerateAudioEndPoints(flow, DeviceState.Active);
+
+        MMDevice? match = null;
+        foreach (var device in endpoints)
         {
-            if (string.Equals(device.FriendlyName, reference.FriendlyName, StringComparison.OrdinalIgnoreCase))
-                return device;
+            // Every endpoint is disposed except the one handed back, including the ones
+            // after the match. Returning from inside the loop left the remainder of the
+            // collection undisposed on every successful name fallback.
+            if (match is null
+                && string.Equals(device.FriendlyName, reference.FriendlyName, StringComparison.OrdinalIgnoreCase))
+            {
+                match = device;
+                continue;
+            }
+
             device.Dispose();
         }
 
-        return null;
+        return match;
     }
 
     public void Dispose() => _enumerator.Dispose();

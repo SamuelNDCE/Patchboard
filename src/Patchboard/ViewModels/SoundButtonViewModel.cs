@@ -7,13 +7,17 @@ public sealed class SoundButtonViewModel : ObservableObject
 {
     private bool _isPlaying;
     private double _progress;
-    private bool _fileMissing;
+    private string? _problem;
+    private string? _problemDetail;
 
     public SoundButtonViewModel(SoundButton model)
     {
         Model = model;
-        _fileMissing = !string.IsNullOrWhiteSpace(model.FilePath) && !File.Exists(model.FilePath);
+        if (IsFileGone(model)) _problem = "file missing";
     }
+
+    private static bool IsFileGone(SoundButton model) =>
+        !string.IsNullOrWhiteSpace(model.FilePath) && !File.Exists(model.FilePath);
 
     public SoundButton Model { get; }
 
@@ -80,19 +84,76 @@ public sealed class SoundButtonViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The file was deleted or moved since it was bound. Shown as a struck through button
-    /// rather than removed, so the user can repoint it instead of losing the hotkey.
+    /// Why this button cannot play, in two or three words, or null when it is fine.
+    ///
+    /// Shown as an overlay rather than removing the button, so the hotkey and the label
+    /// survive and the sound can be repointed. It is a short label and not the full
+    /// message because it has to fit inside a grid tile; <see cref="ProblemDetail"/>
+    /// carries the sentence, and the status bar carries it too.
+    ///
+    /// A missing file is not the only way a button can be dead, which is what this
+    /// replaced: a clip too long to decode was also reported as "file missing", sending
+    /// the user to look for a file that was sitting exactly where they left it.
     /// </summary>
-    public bool FileMissing
+    public string? Problem
     {
-        get => _fileMissing;
-        set => Set(ref _fileMissing, value);
+        get => _problem;
+        private set
+        {
+            if (!Set(ref _problem, value)) return;
+            OnPropertyChanged(nameof(HasProblem));
+        }
+    }
+
+    public bool HasProblem => _problem is not null;
+
+    /// <summary>The full sentence behind <see cref="Problem"/>, for the tooltip.</summary>
+    public string? ProblemDetail
+    {
+        get => _problemDetail;
+        private set => Set(ref _problemDetail, value);
+    }
+
+    /// <summary>
+    /// A two word label for the overlay on a button that will not play.
+    ///
+    /// Kept separate from the exception message because the tile is about 90 pixels wide.
+    /// The distinction that matters is "go and find the file" versus "the file is exactly
+    /// where you left it and the clip is unusable", because those send someone to
+    /// completely different places. Three of the imported buttons are hour long music
+    /// rips, and every one of them used to say "file missing".
+    /// </summary>
+    public static string DescribeProblem(Exception ex) => ex switch
+    {
+        FileNotFoundException or DirectoryNotFoundException => "file missing",
+        // CachedSound throws this both for a clip past the decode ceiling and for one
+        // that decodes to no audio at all.
+        InvalidOperationException when ex.Message.Contains("longer than") => "too long",
+        InvalidOperationException => "no audio",
+        UnauthorizedAccessException => "no access",
+        _ => "won't play",
+    };
+
+    /// <summary>Record why a press did nothing. <paramref name="detail"/> is shown on hover.</summary>
+    public void SetProblem(string label, string detail)
+    {
+        Problem = label;
+        ProblemDetail = detail;
+    }
+
+    /// <summary>The button played, so whatever was wrong with it no longer is.</summary>
+    public void ClearProblem()
+    {
+        Problem = null;
+        ProblemDetail = null;
     }
 
     /// <summary>Re-read everything the model owns after an edit.</summary>
     public void Refresh()
     {
-        FileMissing = !string.IsNullOrWhiteSpace(Model.FilePath) && !File.Exists(Model.FilePath);
+        if (IsFileGone(Model)) SetProblem("file missing", $"{Model.FilePath} is not there any more.");
+        else if (Problem == "file missing") ClearProblem();
+
         OnPropertyChanged(nameof(DisplayName));
         OnPropertyChanged(nameof(HotkeyText));
         OnPropertyChanged(nameof(HasHotkey));

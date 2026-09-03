@@ -123,10 +123,12 @@ build fails with MSB3027.
 
     dotnet run --project tests/Patchboard.Checks
 
-59 checks covering config, decoding his real files, the whole playback chain in memory,
-device enumeration and resolution, live WASAPI output, mic capture and routing, preview
-to a single device, settings round tripping through a real save and load, hotkey parsing,
-and both import paths. It prints PASSED and FAILED counts and exits after reporting.
+It covers config, decoding his real files, the whole playback chain in memory, device
+enumeration and resolution, live WASAPI output, mic capture and routing, preview to a
+single device, settings round tripping through a real save and load, hotkey parsing, both
+import paths, the runtime footprint, and how a dead button reports itself. It prints
+PASSED and FAILED counts and exits after reporting. Read the count off the run rather than
+from here, because a number written down is stale the next time a check is added.
 
 **Never run it with `--no-build`.** That silently executes the previous binary, so code
 that does not compile still reports a pass. It happened once and the run looked clean.
@@ -152,6 +154,49 @@ audible on the devices HE selects, and anything behind a mouse click (rename dia
 drag to reorder, the context menu).
 
     dotnet build src/Patchboard/Patchboard.csproj    # must exit 0 with no warnings
+
+**Build it cold before believing a clean build.** A warm `obj/` hides the error that
+`UseWPF` strips `System.IO` out of the implicit usings; delete `obj/` and `bin/` in both
+projects and build again.
+
+## Releasing
+
+    dotnet publish src/Patchboard/Patchboard.csproj -p:PublishProfile=win-x64 -o publish
+
+One self contained exe, no .NET install needed to run it. The settings live in
+`src/Patchboard/Properties/PublishProfiles/win-x64.pubxml`, not in the csproj: putting
+`SelfContained` in the project file makes the checks project fail to build outright with
+NETSDK1151, because a self contained executable cannot be referenced by one that is not.
+
+Measured on this project, not assumed:
+
+| Setting | Size |
+|---|---|
+| single file, self contained | 156 MB |
+| the above plus `EnableCompressionInSingleFile` | 66 MB |
+| the above plus `InvariantGlobalization` | 66 MB, so it buys nothing and is not set |
+
+`PublishTrimmed` is not an option. WPF is not trimmable; it builds and then fails at
+runtime when XAML reflects over a type the trimmer removed.
+
+## Staying lightweight
+
+This runs behind a game for hours. Two costs are easy to add by accident and neither has
+a visible symptom until it is bad.
+
+- **Mixer inputs are the render thread's per buffer workload.** Every input is read on
+  every buffer, forever, and NAudio cannot remove one without the exact provider instance
+  that was added. A mic sink that was dropped and recreated on each toggle left one dead
+  reader behind per flick; thirty flicks measured thirty of them. `AudioEngine.ReadMixerLoad`
+  exists to make that observable and section 8 of the checks asserts it stays at one.
+- **The decoded cache is bounded and must stay bounded.** 48kHz stereo float is 384KB per
+  second, so his 203 playable clips are 3.3GB if all of them are held. `SoundCache` keeps
+  256MB, least recently used evicted first, and hands back anything larger than the whole
+  budget without storing it.
+
+The 60ms UI timer does no per button work when nothing is playing, and reads no meters
+while the window is minimised. Both are on the path a soundboard actually spends its life
+in.
 
 ## Where things are
 

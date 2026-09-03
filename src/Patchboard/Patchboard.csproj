@@ -12,6 +12,15 @@
     <Version>1.0.0</Version>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!--
+      Ship only English resources. This is safe in an ordinary build, unlike the rest of
+      the publish settings, which live in Properties/PublishProfiles/win-x64.pubxml so
+      that a normal build does not drag a whole self contained runtime into bin/.
+    -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- Also embedded so the window and taskbar pick it up, not just the exe. -->
     <Resource Include="app.ico" />

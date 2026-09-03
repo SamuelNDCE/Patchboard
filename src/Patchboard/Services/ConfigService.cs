@@ -36,6 +36,15 @@ public sealed class ConfigService
         ReadCommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true,
         Converters = { new JsonStringEnumConverter() },
+
+        // Without this the whole file refuses to write the moment any double is NaN, and
+        // AppConfig.WindowLeft and WindowTop are NaN by design until a window position has
+        // actually been recorded. So on a machine that has never saved one, which is every
+        // machine on first run, every save threw and nothing persisted: sounds, devices and
+        // volumes were all silently lost until the window happened to be closed normally,
+        // and lost outright if it was closed while minimised. NaN survives a round trip
+        // now, which is what the double.IsNaN checks in the window restore expect.
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
     };
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
@@ -300,6 +309,17 @@ public sealed class ConfigService
         config.LatencyMs = Math.Clamp(config.LatencyMs, MinLatencyMs, MaxLatencyMs);
         config.MasterVolume = Clamp01(config.MasterVolume);
 
+        // Window size has to be a real number. Left and Top deliberately may not be:
+        // NaN there means "never positioned, let Windows choose", and the restore checks
+        // for exactly that. Size has no such sentinel, so a non-finite one is repaired.
+        config.WindowWidth = FiniteOr(config.WindowWidth, 1240, 200, 10000);
+        config.WindowHeight = FiniteOr(config.WindowHeight, 780, 200, 10000);
+
+        // An infinite coordinate is not the "unpositioned" sentinel and would place the
+        // window nowhere, so it is folded back into one that is.
+        if (double.IsInfinity(config.WindowLeft)) config.WindowLeft = double.NaN;
+        if (double.IsInfinity(config.WindowTop)) config.WindowTop = double.NaN;
+
         // Filtered in place rather than replaced. Save validates too, and the view model
         // adds and removes through these same list instances, so handing it a new list on
         // every save would leave anything holding the old one silently editing a corpse.
@@ -349,6 +369,10 @@ public sealed class ConfigService
     /// serializer and the config would then never be written again.
     /// </summary>
     private static float Clamp01(float value) => float.IsFinite(value) ? Math.Clamp(value, 0f, 1f) : 1f;
+
+    /// <summary>Clamp a dimension, falling back to a default when it is NaN or infinite.</summary>
+    private static double FiniteOr(double value, double fallback, double min, double max) =>
+        double.IsFinite(value) ? Math.Clamp(value, min, max) : fallback;
 
     private static string OrEmpty(string? value) => value ?? "";
 

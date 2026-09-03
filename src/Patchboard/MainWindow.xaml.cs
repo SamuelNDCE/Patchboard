@@ -84,6 +84,25 @@ public partial class MainWindow : Window
         ApplyDarkTitleBar();
     }
 
+    /// <summary>
+    /// Tell the view model whether anything it draws is actually on screen.
+    ///
+    /// A soundboard is used minimised, behind a game, driven by hotkeys. The level meters
+    /// cost a COM call per device on a 60ms timer, and there is no reason to pay it while
+    /// the window is not visible. Playback and hotkeys keep working either way.
+    /// </summary>
+    protected override void OnStateChanged(EventArgs e)
+    {
+        base.OnStateChanged(e);
+        _vm.UiVisible = WindowState != WindowState.Minimized && IsVisible;
+    }
+
+    protected override void OnActivated(EventArgs e)
+    {
+        base.OnActivated(e);
+        _vm.UiVisible = WindowState != WindowState.Minimized && IsVisible;
+    }
+
     private void ApplyDarkTitleBar()
     {
         var handle = new WindowInteropHelper(this).Handle;
@@ -118,9 +137,12 @@ public partial class MainWindow : Window
         // as a request to add files.
         if (e.Data.GetDataPresent(SoundDragFormat)) { e.Handled = true; return; }
 
+        // Marked handled either way. Letting an unrecognised drop bubble on gives no
+        // useful behaviour and only leaves the drag looking like it half worked.
+        e.Handled = true;
+
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths) return;
         _vm.AddFiles(paths);
-        e.Handled = true;
     }
 
     // ---- Dragging a button to a new slot -----------------------------------------

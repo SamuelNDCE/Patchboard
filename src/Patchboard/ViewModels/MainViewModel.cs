@@ -28,8 +28,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly DispatcherTimer _volumeSaveTimer;
     private bool _pendingVolumeSave;
 
-    /// <summary>Decoded audio, keyed by file path. A clip is decoded once per session.</summary>
-    private readonly Dictionary<string, CachedSound> _cache = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Buttons currently drawn as playing. Lets an idle tick do nothing at all instead of
+    /// proving, once per button, that nothing changed.
+    /// </summary>
+    private int _buttonsShowingPlaying;
+
+    /// <summary>
+    /// Whether the window is on screen. False while minimised, which is most of the time
+    /// for a soundboard, and the level meters are not worth reading when nobody can see
+    /// them. Playback and hotkeys are unaffected; only the drawing is.
+    /// </summary>
+    public bool UiVisible { get; set; } = true;
+
+    /// <summary>
+    /// Decoded audio, under a memory budget. A clip stays decoded while it is being used
+    /// and is dropped once the board has moved on to others.
+    /// </summary>
+    private readonly SoundCache _cache = new();
 
     private AppConfig _config;
     private string _searchText = "";
@@ -424,12 +440,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            vm.FileMissing = true;
+            vm.SetProblem(SoundButtonViewModel.DescribeProblem(ex), ex.Message);
             Status = ex.Message;
             return;
         }
 
-        vm.FileMissing = false;
+        vm.ClearProblem();
 
         // Always Restart for a preview. Stacking copies of the same clip while auditioning
         // it is never what someone wants.
@@ -623,25 +639,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            vm.FileMissing = true;
+            vm.SetProblem(SoundButtonViewModel.DescribeProblem(ex), ex.Message);
             Status = ex.Message;
             return;
         }
 
-        vm.FileMissing = false;
+        vm.ClearProblem();
         var handle = _engine.Play(vm.Id, sound, vm.Model.Volume, vm.Model.Retrigger);
 
         // A null handle from a Toggle press means it stopped rather than started.
         if (handle is null && vm.Model.Retrigger == RetriggerMode.Toggle) vm.IsPlaying = false;
     }
 
-    private CachedSound GetOrLoad(string path)
-    {
-        if (_cache.TryGetValue(path, out var cached)) return cached;
-        var loaded = CachedSound.Load(path);
-        _cache[path] = loaded;
-        return loaded;
-    }
+    private CachedSound GetOrLoad(string path) => _cache.GetOrLoad(path);
+
+
 
     public void StopAll()
     {
@@ -654,14 +666,38 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var active = _engine.ActiveSounds;
 
-        foreach (var vm in Sounds)
+        // An idle soundboard is the normal case: it sits behind a game for hours with
+        // nothing playing. Walking all 206 buttons and running a LINQ scan for each of
+        // them, seventeen times a second, to conclude that nothing changed is the kind of
+        // background cost that has no symptom and no excuse. Skip it outright unless
+        // something is playing now or was on the previous tick.
+        if (active.Count > 0 || _buttonsShowingPlaying > 0)
         {
-            var playing = active.FirstOrDefault(a => a.ButtonId == vm.Id);
-            var isPlaying = playing is not null;
-            if (vm.IsPlaying != isPlaying) vm.IsPlaying = isPlaying;
-            if (isPlaying) vm.Progress = playing!.Progress;
-            else if (vm.Progress != 0) vm.Progress = 0;
+            var showing = 0;
+            foreach (var vm in Sounds)
+            {
+                PlayingSound? playing = null;
+                foreach (var candidate in active)
+                {
+                    if (candidate.ButtonId != vm.Id) continue;
+                    playing = candidate;
+                    break;
+                }
+
+                var isPlaying = playing is not null;
+                if (isPlaying) showing++;
+                if (vm.IsPlaying != isPlaying) vm.IsPlaying = isPlaying;
+                if (isPlaying) vm.Progress = playing!.Progress;
+                else if (vm.Progress != 0) vm.Progress = 0;
+            }
+
+            _buttonsShowingPlaying = showing;
         }
+
+        // Meters are only worth reading when someone can see them. While the window is
+        // minimised, which is where a soundboard spends most of its life, this skips a
+        // COM call per device seventeen times a second.
+        if (!UiVisible) return;
 
         foreach (var (deviceId, peak) in _engine.ReadOutputPeaks())
         {
@@ -737,23 +773,48 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (Directory.Exists(path))
             {
-                IEnumerable<string> found;
-                try
-                {
-                    found = Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories);
-                }
-                catch (Exception)
-                {
-                    // An unreadable folder should not abort the rest of the drop.
-                    continue;
-                }
+                // One level deep, matching ResananceImporter.ImportFromFolder rather than
+                // recursing without limit. A sound library is a folder of clips with a few
+                // themed subfolders; dropping Downloads on the window used to walk the
+                // entire tree and put a music collection on the board.
+                foreach (var file in AudioFilesIn(path)) yield return file;
 
-                foreach (var file in found.Where(IsAudio)) yield return file;
+                foreach (var child in SubfoldersOf(path))
+                    foreach (var file in AudioFilesIn(child))
+                        yield return file;
             }
             else if (File.Exists(path) && IsAudio(path))
             {
                 yield return path;
             }
+        }
+    }
+
+    /// <summary>Audio files directly in one folder. An unreadable folder yields nothing.</summary>
+    private static IEnumerable<string> AudioFilesIn(string folder)
+    {
+        try
+        {
+            return Directory.EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly).Where(IsAudio).ToList();
+        }
+        catch (Exception)
+        {
+            // A permission denied folder must not abort the rest of the drop. Materialised
+            // with ToList inside the try because a lazy sequence would throw later, out
+            // where nothing is catching it.
+            return [];
+        }
+    }
+
+    private static IEnumerable<string> SubfoldersOf(string folder)
+    {
+        try
+        {
+            return Directory.EnumerateDirectories(folder).ToList();
+        }
+        catch (Exception)
+        {
+            return [];
         }
     }
 
