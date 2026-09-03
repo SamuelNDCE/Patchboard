@@ -77,7 +77,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         Outputs = [];
         Inputs = [];
+
+        // Checked before RefreshDevices, because Merge populates OutputDevices from live
+        // hardware and after it runs a fresh config is indistinguishable from a considered
+        // one where everything happens to be unticked.
+        var firstRun = _config.OutputDevices.Count == 0;
+
         RefreshDevices();
+
+        // Seeding writes the saved references rather than the view models, so the second
+        // RefreshDevices rebuilds the rows from them. Going through the view model setters
+        // instead would fire the changed handler three times, and each one reopens every
+        // WASAPI stream, so a first launch paid four rounds of device open and close before
+        // the constructor had finished.
+        if (firstRun && SeedDefaultRouting()) RefreshDevices();
 
         _engine.MasterVolume = _config.MasterVolume;
         ApplyOutputs();
@@ -547,6 +560,72 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool HasLoopWarning => LoopWarning is not null;
 
     /// <summary>
+    /// Give a brand new install a routing that actually does the job.
+    ///
+    /// A soundboard exists to put sound into a voice chat. Starting with nothing ticked meant
+    /// a first press was silent, and starting with only real speakers ticked, which is where
+    /// this ended up in practice, meant every press was audible to the user and to nobody
+    /// else. Both look like the app is broken, and the second is worse because it makes a
+    /// noise, so it looks like it is working.
+    ///
+    /// A fresh install therefore gets two things: the default playback device, marked as the
+    /// monitor so previews have somewhere to go, and the best available virtual cable.
+    /// Neither carries the microphone.
+    ///
+    /// Only ever on a genuinely fresh config. Re-applying this on later launches would
+    /// override a deliberate choice, and someone who wants speakers only is entitled to it.
+    /// </summary>
+    /// <returns>True when something was changed and the device rows need rebuilding.</returns>
+    private bool SeedDefaultRouting()
+    {
+        // Chosen using the live view models, which know which endpoint Windows calls the
+        // default and which ones are virtual cables, but written to the saved references so
+        // no changed handler fires while the constructor is still running.
+        var chosen = new List<string>();
+
+        var local = RoutingDefaults.PickMonitor(
+            Outputs, o => o.FriendlyName, o => o.IsDefault, o => o.IsVirtual);
+
+        if (local is not null)
+        {
+            local.Reference.Enabled = true;
+            local.Reference.IsMonitor = true;
+            local.Reference.ReceivesMic = false;
+            chosen.Add(local.FriendlyName);
+        }
+
+        // VoiceRoute already prefers Voicemeeter's virtual input over a bare VB-Cable,
+        // because on a machine with both it is the one that reaches the bus the user's voice
+        // already uses.
+        var cable = VoiceRoute;
+        if (cable is not null && !cable.IsEnabled)
+        {
+            // Never on a seeded device. A saved reference can carry this flag from an earlier
+            // install, and a cable that echoes the microphone back into the bus it feeds is a
+            // loop rather than a feature.
+            cable.Reference.Enabled = true;
+            cable.Reference.ReceivesMic = false;
+            chosen.Add(cable.FriendlyName);
+        }
+
+        if (chosen.Count == 0) return false;
+
+        // Exactly one monitor. Seeding sets one, so anything a stale config left marked has
+        // to go, or Monitor picks whichever happens to be first.
+        foreach (var other in Outputs.Where(o => !ReferenceEquals(o, local)))
+            other.Reference.IsMonitor = false;
+
+        Save();
+
+        Status = cable is null
+            ? $"Playing to {chosen[0]}. No virtual cable found, so only you can hear it. " +
+              "Install VB-Cable or VoiceMeeter to send sound into Discord or a game."
+            : $"Set up to play to {string.Join(" and ", chosen)}.";
+
+        return true;
+    }
+
+    /// <summary>
     /// Tick one output on the user's behalf, from the banner's shortcut buttons.
     ///
     /// The microphone routing on that device is cleared first, and that is not tidiness.
@@ -627,19 +706,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// The endpoint most likely to actually reach Discord or a game as a microphone.
     ///
-    /// VoiceMeeter comes first, and that order is the whole point. Both VB-Cable and
-    /// VoiceMeeter are usually installed together, but only one of them is carrying the
-    /// user's microphone, and the other is a cable with nothing attached to its far end.
-    /// This shortcut originally offered CABLE Input unconditionally and sent Samuel to a
-    /// dead end: his VoiceMeeter reads his USB mic and routes it to B1, while nothing on
-    /// the machine reads CABLE Output at all. Where VoiceMeeter is present it is the safer
-    /// guess, because its virtual input reaches the same bus his voice already uses.
+    /// The preference order lives in <see cref="RoutingDefaults"/> so that this shortcut and
+    /// the first-run seeding cannot drift apart. They did not, but they were two copies of
+    /// the same list, which is the state just before they do.
     /// </summary>
     private DeviceViewModel? VoiceRoute =>
-        Outputs.FirstOrDefault(o =>
-            o.FriendlyName.StartsWith("Voicemeeter Input", StringComparison.OrdinalIgnoreCase))
-        ?? Outputs.FirstOrDefault(o =>
-            o.FriendlyName.StartsWith("CABLE Input", StringComparison.OrdinalIgnoreCase));
+        RoutingDefaults.PickCable(Outputs, o => o.FriendlyName);
 
     public bool HasCableOutput => VoiceRoute is not null;
 

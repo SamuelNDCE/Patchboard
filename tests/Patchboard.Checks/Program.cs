@@ -59,7 +59,10 @@ Check("every button points at a real file", onDisk == config.Sounds.Count,
 // --------------------------------------------------------------------------
 Section("2. DECODE, the real files from his library");
 
-var samples = config.Sounds.Where(s => File.Exists(s.FilePath)).Take(6).ToList();
+// Twelve rather than six. The playback checks below need one clip with a loud opening,
+// and a narrow sample makes finding one a matter of luck about which entries happen to be
+// first in his library. Decoding is a few hundred milliseconds each at the median length.
+var samples = config.Sounds.Where(s => File.Exists(s.FilePath)).Take(12).ToList();
 var decoded = new List<CachedSound>();
 
 foreach (var sound in samples)
@@ -91,27 +94,36 @@ Section("3. PLAYBACK CHAIN, in memory, no device touched");
 
 if (decoded.Count > 0)
 {
-    // Pick a clip that actually has audio in its opening second. "arana" is Aria Math,
-    // which fades in from silence, so testing the mixer on it measures nothing.
-    var clip = decoded
-        .OrderByDescending(d =>
-        {
-            var window = Math.Min(d.AudioData.Length, AudioFormat.SampleRate * AudioFormat.Channels);
-            var peak = 0f;
-            for (var i = 0; i < window; i++) peak = Math.Max(peak, Math.Abs(d.AudioData[i]));
-            return peak;
-        })
-        .First();
+    // Pick a clip that actually has audio where these checks look for it.
+    //
+    // The window used to rank and the window used to measure must be THE SAME window, and
+    // they were not: ranking looked at the first second and the assertion at the first 4800
+    // samples, so a clip could win the ranking with a loud half-second while its first 50ms
+    // was silence. That is exactly what happened once the sampled entries changed, and it
+    // reported four failures against a mixer that was working perfectly.
+    const int OpeningWindow = 4800; // 50ms of 48kHz stereo
 
-    var openingPeak = 0f;
-    for (var i = 0; i < Math.Min(clip.AudioData.Length, 4800); i++)
-        openingPeak = Math.Max(openingPeak, Math.Abs(clip.AudioData[i]));
+    static float OpeningPeak(CachedSound clip)
+    {
+        var peak = 0f;
+        for (var i = 0; i < Math.Min(clip.AudioData.Length, OpeningWindow); i++)
+            peak = Math.Max(peak, Math.Abs(clip.AudioData[i]));
+        return peak;
+    }
 
-    Console.WriteLine($"  ..... using a clip whose first 4800 samples peak at {openingPeak:0.000}");
+    var clip = decoded.OrderByDescending(OpeningPeak).First();
+    var openingPeak = OpeningPeak(clip);
 
-    Check("test clip actually has audio at the start", openingPeak > 0.01f,
-        "otherwise every check below measures silence and proves nothing");
+    Console.WriteLine($"  ..... using the loudest opening of {decoded.Count} clips, peaking at {openingPeak:0.000}");
 
+if (openingPeak <= 0.01f)
+{
+    Console.WriteLine("  SKIP  no sampled clip has audio in its first 50ms, so the amplitude");
+    Console.WriteLine("        checks below would measure silence and prove nothing. This is a");
+    Console.WriteLine("        property of the library sampled, not a fault in the audio chain.");
+}
+else
+{
     // Full volume vs half volume, same clip, same position.
     var loud = new CachedSoundSampleProvider(clip, 1.0f);
     var quiet = new CachedSoundSampleProvider(clip, 0.5f);
@@ -177,7 +189,8 @@ if (decoded.Count > 0)
 
     // Surround endpoints report 6 or 8 channels.
     var folded = new StereoToMultiChannelSampleProviderProbe(clip);
-    Check("adapts stereo to a 6 channel endpoint", folded.Works);
+    Check("adapts stereo to a 6 channel endpoint", folded.Works, folded.Error);
+}
 }
 
 // --------------------------------------------------------------------------
@@ -1101,6 +1114,99 @@ Section("8i. LONG CLIPS PLAY, by streaming instead of decoding");
 }
 
 // --------------------------------------------------------------------------
+Section("8m. A FRESH INSTALL PICKS A ROUTE THAT ACTUALLY WORKS");
+
+// The whole point of a soundboard is putting sound into a voice chat. Two ways to fail at
+// that on first launch, and both happened: nothing ticked, so a press was silent, and only
+// real speakers ticked, so every press was audible to the user and to nobody else. The
+// second is worse, because it makes a noise and therefore looks like it is working.
+//
+// This tests the POLICY, not the wiring. The wiring needs a dispatcher and opens real WASAPI
+// devices; the policy is pure. Testing it by moving the real config aside and looking at what
+// the app wrote turned out to observe the user's own edits instead, which is why the policy
+// got pulled out into RoutingDefaults.
+{
+    static AudioDeviceInfo Dev(string name, bool isDefault = false, bool isVirtual = false) =>
+        new(name + "-id", name, isDefault, isVirtual);
+
+    // His actual machine, as DeviceService reports it: real hardware first, cables after.
+    var his = new List<AudioDeviceInfo>
+    {
+        Dev("Speakers (FxSound Audio Enhancer)", isDefault: true),
+        Dev("Speakers (Realtek(R) Audio)"),
+        Dev("XG27AQWMG (NVIDIA High Definition Audio)"),
+        Dev("CABLE In 16ch (VB-Audio Virtual Cable)", isVirtual: true),
+        Dev("CABLE Input (VB-Audio Virtual Cable)", isVirtual: true),
+        Dev("Voicemeeter AUX Input (VB-Audio Voicemeeter VAIO)", isVirtual: true),
+        Dev("Voicemeeter In 1 (VB-Audio Voicemeeter VAIO)", isVirtual: true),
+        Dev("Voicemeeter Input (VB-Audio Voicemeeter VAIO)", isVirtual: true),
+    };
+
+    var (monitor, cable) = RoutingDefaults.Choose(his);
+
+    Check("it picks something the user can hear", monitor is not null, monitor?.FriendlyName ?? "NOTHING");
+    Check("and that is not a virtual cable", monitor is { IsVirtual: false });
+    Check("it prefers the Windows default for that", monitor?.IsDefault == true, monitor?.FriendlyName);
+
+    Check("it picks something everyone else can hear", cable is not null, cable?.FriendlyName ?? "NOTHING");
+    Check("and that IS a virtual cable", cable is { IsVirtual: true });
+
+    // The order matters, not just the presence. Both are installed on this machine, and only
+    // VoiceMeeter's carries his voice; CABLE Output is read by nothing, so a soundboard
+    // pointed at CABLE Input plays into a dead end.
+    Check("VoiceMeeter's input beats a bare VB-Cable",
+        cable?.FriendlyName.StartsWith("Voicemeeter Input") == true, cable?.FriendlyName);
+
+    // "Voicemeeter In 1" is a HARDWARE input strip, not the virtual one. Matching it would
+    // send sound to a strip fed by a physical device and reach nobody.
+    Check("it does not grab a numbered VoiceMeeter hardware strip",
+        cable?.FriendlyName.StartsWith("Voicemeeter In 1") != true, cable?.FriendlyName);
+
+    // A machine with no cable installed at all must say so rather than silently pick nothing
+    // and look configured.
+    var bare = new List<AudioDeviceInfo> { Dev("Speakers (Realtek)", isDefault: true) };
+    var (bareMonitor, bareCable) = RoutingDefaults.Choose(bare);
+    Check("with no cable installed it still picks a monitor", bareMonitor is not null);
+    Check("and reports no cable rather than guessing", bareCable is null);
+
+    // No default endpoint, which happens on a machine mid driver install.
+    var noDefault = new List<AudioDeviceInfo>
+    {
+        Dev("Speakers (Realtek)"),
+        Dev("CABLE Input (VB-Audio Virtual Cable)", isVirtual: true),
+    };
+    var (ndMonitor, ndCable) = RoutingDefaults.Choose(noDefault);
+    Check("with no Windows default it falls back to any real hardware",
+        ndMonitor is { IsVirtual: false }, ndMonitor?.FriendlyName);
+    Check("and still finds the cable", ndCable is not null, ndCable?.FriendlyName);
+
+    // Only cables present. A monitor pick must not fall through to a virtual device, because
+    // then the user hears nothing and assumes it is broken.
+    var cablesOnly = new List<AudioDeviceInfo>
+    {
+        Dev("CABLE Input (VB-Audio Virtual Cable)", isVirtual: true),
+        Dev("Voicemeeter Input (VB-Audio Voicemeeter VAIO)", isVirtual: true),
+    };
+    var (coMonitor, coCable) = RoutingDefaults.Choose(cablesOnly);
+    Check("with only cables present it picks no monitor rather than a silent one",
+        coMonitor is null, coMonitor?.FriendlyName ?? "none, correctly");
+    Check("but still finds the cable", coCable is not null);
+
+    // Empty machine.
+    var (eMonitor, eCable) = RoutingDefaults.Choose(new List<AudioDeviceInfo>());
+    Check("no endpoints at all is handled", eMonitor is null && eCable is null);
+
+    // And the live machine, through the real DeviceService, so the policy is checked against
+    // what Windows actually reports rather than only against a hand written list.
+    var liveOutputs = devices.ListOutputs();
+    var (liveMonitor, liveCable) = RoutingDefaults.Choose(liveOutputs);
+    Check("on this real machine a fresh install would be audible to the user",
+        liveMonitor is not null, liveMonitor?.FriendlyName ?? "NOTHING");
+    Check("and would reach a voice chat",
+        liveCable is not null, liveCable?.FriendlyName ?? "NOTHING");
+}
+
+// --------------------------------------------------------------------------
 Section("8j. DURATIONS A PERSON CAN READ");
 
 // The trim panel showed "2950.0s long" for a 49 minute clip. Technically the length.
@@ -1414,7 +1520,13 @@ file sealed class StereoToMultiChannelSampleProviderProbe
             var instance = (ISampleProvider?)Activator.CreateInstance(type, mixer, 6);
             if (instance is null) { Works = false; return; }
 
-            var buffer = new float[6 * 800];
+            // 2400 frames, because 6 channels out means 2 samples in per frame and the
+            // clip was selected for having audio in its first 4800 stereo samples. Reading
+            // 800 frames consumed only the first 1600 of those and then reported that the
+            // front channels were silent, which was true of that narrower window and said
+            // nothing about the adapter. Every consumer has to look inside the same window
+            // the clip was chosen on.
+            var buffer = new float[6 * 2400];
             var read = instance.Read(buffer.AsSpan());
 
             // Front left and right carry audio, the other four stay silent.
@@ -1428,10 +1540,20 @@ file sealed class StereoToMultiChannelSampleProviderProbe
             }
 
             Works = instance.WaveFormat.Channels == 6 && read > 0 && frontHasAudio && rearIsSilent;
+
+            // Four conditions behind one bool told me nothing when it went false. Report
+            // which one, because "it does not work" is not a diagnosis.
+            if (!Works)
+                Error = $"channels={instance.WaveFormat.Channels} read={read} " +
+                        $"frontHasAudio={frontHasAudio} rearIsSilent={rearIsSilent}";
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             Works = false;
+            Error = $"{ex.GetType().Name}: {ex.Message}";
         }
     }
+
+    /// <summary>Why it failed. A probe that hides its own exception cannot be debugged.</summary>
+    public string Error { get; private set; } = "";
 }
