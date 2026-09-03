@@ -52,6 +52,28 @@ public sealed class SoundButton
     /// </summary>
     public RetriggerMode Retrigger { get; set; } = RetriggerMode.Toggle;
 
+    /// <summary>
+    /// Where in the file to start, in milliseconds. 0 is the beginning.
+    ///
+    /// Trimming is what makes a long recording usable on a board at all: only the trimmed
+    /// window is decoded, so the length limit applies to the piece you kept rather than to
+    /// the file. Three of the imported buttons are hour long music rips that could never
+    /// play; a start and an end turns them into the eight seconds anyone actually wanted.
+    /// </summary>
+    public int StartMs { get; set; }
+
+    /// <summary>Where to stop, in milliseconds. 0 means play to the end of the file.</summary>
+    public int EndMs { get; set; }
+
+    /// <summary>True when only part of the file is used.</summary>
+    public bool IsTrimmed => StartMs > 0 || EndMs > 0;
+
+    /// <summary>
+    /// Identity for the decoded-audio cache. Two buttons on the same file with different
+    /// trims are different audio and must not share an entry.
+    /// </summary>
+    public string CacheKey => IsTrimmed ? $"{FilePath}|{StartMs}|{EndMs}" : FilePath;
+
     public Hotkey Hotkey { get; set; } = new();
 
     /// <summary>Position in the grid. Buttons are laid out in this order.</summary>

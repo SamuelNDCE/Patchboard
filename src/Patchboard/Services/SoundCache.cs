@@ -80,6 +80,46 @@ public sealed class SoundCache
     /// <summary>True when this clip is decoded and resident right now.</summary>
     public bool Contains(string path) => _entries.ContainsKey(path);
 
+    /// <summary>
+    /// Return an already decoded clip without touching the disk.
+    ///
+    /// This is the fast path a soundboard lives on. It matters that it is separate from
+    /// <see cref="GetOrLoad"/>: decoding now happens on a background thread, and going
+    /// through a thread hop for a clip already in memory would put a scheduler round trip
+    /// between the click and the sound.
+    /// </summary>
+    public bool TryGet(string path, out CachedSound sound)
+    {
+        if (_entries.TryGetValue(path, out var node))
+        {
+            _order.Remove(node);
+            _order.AddFirst(node);
+            sound = node.Value.Sound;
+            return true;
+        }
+
+        sound = null!;
+        return false;
+    }
+
+    /// <summary>
+    /// Take a clip decoded elsewhere, typically on a background thread, into the cache.
+    /// Same budget rules as <see cref="GetOrLoad"/>.
+    /// </summary>
+    public void Add(string path, CachedSound sound)
+    {
+        if (_entries.ContainsKey(path)) return;
+
+        var bytes = (long)sound.AudioData.Length * sizeof(float);
+        if (bytes > _budgetBytes) return;
+
+        var node = _order.AddFirst(new Entry(path, sound, bytes));
+        _entries[path] = node;
+        _bytes += bytes;
+
+        Trim();
+    }
+
     /// <summary>Forget one clip, so a file that changed on disk is decoded again.</summary>
     public void Remove(string path)
     {

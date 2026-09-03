@@ -137,6 +137,60 @@
         <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
     </Style>
 
+    <!-- Small numeric box for the trim fields, styled to match the dark menu. -->
+    <Style x:Key="TrimBox" TargetType="TextBox">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
+        <Setter Property="Padding" Value="6,4" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Bd"
+                            Background="#0E0E0E"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsFocused" Value="True">
+                            <Setter TargetName="Bd" Property="BorderBrush" Value="#4A4A4A" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A colour swatch in the right click menu. Square, borderless until hovered,
+         so a row of them reads as colour rather than as a row of buttons. -->
+    <Style x:Key="Swatch" TargetType="Button">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Sw"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="#3A3A3A"
+                            BorderThickness="1"
+                            CornerRadius="4" />
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Sw" Property="BorderBrush" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Sw" Property="Opacity" Value="0.7" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============================ The sound tile ============================
          DataContext is a SoundButtonViewModel. The whole cell is the hit target.
          Playing state shows a 2px accent left edge plus a progress line along the
@@ -195,19 +249,45 @@
                                        Margin="8,14,8,10"
                                        ToolTip="{Binding DisplayName}" />
 
-                            <!-- Unplayable: covered rather than removed, so the binding and
-                                 hotkey survive and can be repointed. The label says which
-                                 kind of broken it is, because "file missing" on a clip that
-                                 is merely too long sends the user hunting for nothing. -->
-                            <Border Background="#99000000"
+                            <!-- Unplayable: flagged rather than removed, so the binding and
+                                 hotkey survive and can be repointed.
+
+                                 A strip along the bottom, NOT a translucent sheet over the
+                                 middle. The sheet was 60% opaque black laid directly over
+                                 the centred name, so the name bled through and the two
+                                 pieces of text drew on top of each other and neither could
+                                 be read. The name is dimmed instead, which says "this one
+                                 is dead" without hiding which one it is.
+
+                                 The label says which kind of broken it is, because "file
+                                 missing" on a clip that is merely too long sends you
+                                 hunting for a file that is exactly where you left it. -->
+                            <Border VerticalAlignment="Bottom"
+                                    Background="#26100F"
+                                    BorderBrush="#5A2320"
+                                    BorderThickness="0,1,0,0"
+                                    Padding="4,2"
                                     ToolTip="{Binding ProblemDetail}"
                                     Visibility="{Binding HasProblem, Converter={StaticResource BoolToVis}}">
                                 <TextBlock Text="{Binding Problem}"
                                            FontFamily="{StaticResource UiFont}"
-                                           FontSize="11"
-                                           TextWrapping="Wrap"
+                                           FontSize="10"
+                                           TextTrimming="CharacterEllipsis"
                                            TextAlignment="Center"
                                            Foreground="{StaticResource DangerBrush}"
+                                           HorizontalAlignment="Center" />
+                            </Border>
+
+                            <!-- Decoding after a press. Only shows for a clip not already
+                                 in memory, which is why it is worth saying: the first press
+                                 of a ten minute file used to look like a click that did
+                                 nothing at all. -->
+                            <Border Background="#CC0A0A0A"
+                                    Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="opening"
+                                           FontFamily="{StaticResource UiFont}"
+                                           FontSize="11"
+                                           Foreground="{StaticResource TextDimBrush}"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center" />
                             </Border>
@@ -223,6 +303,11 @@
                         </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
+                        <!-- A dead button stays legible but visibly out of service. -->
+                        <DataTrigger Binding="{Binding HasProblem}" Value="True">
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.55" />
+                        </DataTrigger>
+
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Wash" Property="Opacity" Value="0.06" />
                             <Setter TargetName="Bd" Property="BorderBrush" Value="#3D3D3D" />

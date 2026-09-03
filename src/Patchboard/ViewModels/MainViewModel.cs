@@ -34,6 +34,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private int _buttonsShowingPlaying;
 
+    /// <summary>Files currently being decoded, so one button cannot start two decodes.</summary>
+    private readonly HashSet<string> _loading = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Whether the window is on screen. False while minimised, which is most of the time
     /// for a soundboard, and the level meters are not worth reading when nobody can see
@@ -89,11 +92,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CancelRenameCommand = new RelayCommand(CancelRename);
         SetImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PickImage(vm); });
         ClearImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) ClearImage(vm); });
+        SetColorCommand = new RelayCommand(SetColor);
         BeginBindHotkeyCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginBind(vm); });
         ClearHotkeyCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) ClearHotkey(vm); });
         RefreshDevicesCommand = new RelayCommand(() => { RefreshDevices(); ApplyOutputs(); ApplyMic(); });
         ImportResananceCommand = new RelayCommand(ImportResanance);
         ImportFolderCommand = new RelayCommand(ImportFolder);
+        RemoveDeadCommand = new RelayCommand(RemoveDead);
+        RemoveDuplicatesCommand = new RelayCommand(RemoveDuplicates);
+        TidyNamesCommand = new RelayCommand(TidyNames);
         UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
         UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
         MuteMicCommand = new RelayCommand(MuteMic);
@@ -154,11 +161,15 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand CancelRenameCommand { get; }
     public RelayCommand SetImageCommand { get; }
     public RelayCommand ClearImageCommand { get; }
+    public RelayCommand SetColorCommand { get; }
     public RelayCommand BeginBindHotkeyCommand { get; }
     public RelayCommand ClearHotkeyCommand { get; }
     public RelayCommand RefreshDevicesCommand { get; }
     public RelayCommand ImportResananceCommand { get; }
     public RelayCommand ImportFolderCommand { get; }
+    public RelayCommand RemoveDeadCommand { get; }
+    public RelayCommand RemoveDuplicatesCommand { get; }
+    public RelayCommand TidyNamesCommand { get; }
     public RelayCommand UseDefaultOutputCommand { get; }
     public RelayCommand UseCableOutputCommand { get; }
     public RelayCommand MuteMicCommand { get; }
@@ -379,6 +390,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         vm.PreviewCommand = new RelayCommand(() => PreviewInHeadphones(vm));
         vm.VolumeChanged += OnSoundVolumeChanged;
+        vm.ColorChanged += OnSoundColorChanged;
+        vm.TrimChanged += OnSoundTrimChanged;
     }
 
     /// <summary>
@@ -392,6 +405,49 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _volumeSaveTimer.Stop();
         _volumeSaveTimer.Start();
         Status = $"{vm.DisplayName} at {vm.VolumeText}.";
+    }
+
+    /// <summary>
+    /// Paint one button, or clear it back to the default surface.
+    ///
+    /// The parameter arrives from the swatch as "vm|#RRGGBB", or "vm|" to clear, because a
+    /// WPF command carries a single parameter and the alternative was a command per colour.
+    /// </summary>
+    private void SetColor(object? parameter)
+    {
+        if (parameter is not object[] { Length: 2 } pair) return;
+        if (pair[0] is not SoundButtonViewModel vm) return;
+
+        var colour = pair[1] as string;
+        vm.Color = string.IsNullOrWhiteSpace(colour) ? null : colour;
+    }
+
+    private void OnSoundColorChanged(SoundButtonViewModel vm)
+    {
+        Save();
+        Status = vm.Color is null ? $"{vm.DisplayName} back to the default colour." : $"{vm.DisplayName} recoloured.";
+    }
+
+    /// <summary>
+    /// The trim moved, so whatever is cached under the old window is now the wrong audio.
+    ///
+    /// Both keys are dropped: the one it had before this edit is unknown here, so the
+    /// untrimmed key is cleared too. Re-decoding one clip costs a few hundred milliseconds
+    /// on a background thread; playing the wrong few seconds costs a take.
+    /// </summary>
+    private void OnSoundTrimChanged(SoundButtonViewModel vm)
+    {
+        _cache.Remove(vm.Model.CacheKey);
+        _cache.Remove(vm.Model.FilePath);
+
+        // Same debounce as the volume slider: this fires on every keystroke in the box.
+        _pendingVolumeSave = true;
+        _volumeSaveTimer.Stop();
+        _volumeSaveTimer.Start();
+
+        Status = vm.Model.IsTrimmed
+            ? $"{vm.DisplayName}: {vm.TrimText}."
+            : $"{vm.DisplayName} plays in full again.";
     }
 
     private void OnMonitorChanged(DeviceViewModel vm)
@@ -418,7 +474,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// Play a sound to the monitor device only, so it can be checked without everyone in
     /// Discord hearing it.
     /// </summary>
-    public void PreviewInHeadphones(SoundButtonViewModel vm)
+    public async void PreviewInHeadphones(SoundButtonViewModel vm)
     {
         var monitor = Monitor;
         if (monitor is null)
@@ -433,19 +489,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        CachedSound sound;
-        try
-        {
-            sound = GetOrLoad(vm.Model.FilePath);
-        }
-        catch (Exception ex)
-        {
-            vm.SetProblem(SoundButtonViewModel.DescribeProblem(ex), ex.Message);
-            Status = ex.Message;
-            return;
-        }
-
-        vm.ClearProblem();
+        var sound = await Decode(vm);
+        if (sound is null) return;
 
         // Always Restart for a preview. Stacking copies of the same clip while auditioning
         // it is never what someone wants.
@@ -533,6 +578,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public bool HasNoOutput => Outputs.All(o => !o.IsEnabled);
 
+    /// <summary>
+    /// Something is ticked, but everything ticked is real hardware, so the sound comes out
+    /// of speakers or headphones and reaches nobody else.
+    ///
+    /// This is a completely different failure from having nothing ticked, and it is the
+    /// one that actually happened twice. Resanance had exactly this state, which is why it
+    /// "did not work" and why Patchboard exists; then Patchboard ended up in it too, with
+    /// only Realtek speakers enabled. In both cases the app looked correctly configured,
+    /// every press made a noise, and not one person on the other end heard anything.
+    ///
+    /// Deliberately not raised while nothing is ticked at all, because HasNoOutput already
+    /// covers that and two banners saying different things about the same panel is worse
+    /// than one saying the right thing.
+    /// </summary>
+    public bool OnlyLocalOutput =>
+        !HasNoOutput && Outputs.Where(o => o.IsEnabled).All(o => !o.IsVirtual);
+
+    /// <summary>
+    /// Names what is currently ticked, so the warning can never be vague about which
+    /// device it means.
+    /// </summary>
+    public string LocalOutputNames =>
+        string.Join(", ", Outputs.Where(o => o.IsEnabled).Select(o => o.FriendlyName));
+
     public bool HasDefaultOutput => Outputs.Any(o => o.IsDefault);
 
     public string DefaultOutputName =>
@@ -572,6 +641,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void NotifyOutputState()
     {
         OnPropertyChanged(nameof(HasNoOutput));
+        OnPropertyChanged(nameof(OnlyLocalOutput));
+        OnPropertyChanged(nameof(LocalOutputNames));
         OnPropertyChanged(nameof(HasDefaultOutput));
         OnPropertyChanged(nameof(DefaultOutputName));
         OnPropertyChanged(nameof(HasCableOutput));
@@ -624,7 +695,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // ---- Playback ---------------------------------------------------------------
 
-    public void Play(SoundButtonViewModel vm)
+    public async void Play(SoundButtonViewModel vm)
     {
         if (_config.OutputDevices.All(o => !o.Enabled))
         {
@@ -632,26 +703,71 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        CachedSound sound;
-        try
-        {
-            sound = GetOrLoad(vm.Model.FilePath);
-        }
-        catch (Exception ex)
-        {
-            vm.SetProblem(SoundButtonViewModel.DescribeProblem(ex), ex.Message);
-            Status = ex.Message;
-            return;
-        }
+        var sound = await Decode(vm);
+        if (sound is null) return;
 
-        vm.ClearProblem();
         var handle = _engine.Play(vm.Id, sound, vm.Model.Volume, vm.Model.Retrigger);
 
         // A null handle from a Toggle press means it stopped rather than started.
         if (handle is null && vm.Model.Retrigger == RetriggerMode.Toggle) vm.IsPlaying = false;
     }
 
-    private CachedSound GetOrLoad(string path) => _cache.GetOrLoad(path);
+    /// <summary>
+    /// Get the decoded clip for a button, decoding it off the UI thread if it is not
+    /// already in memory. Returns null when it cannot be played, having already put the
+    /// reason on the button and in the status bar.
+    ///
+    /// Decoding used to run inline in the click handler, which froze the whole window for
+    /// as long as it took. Measured against the real library: 1.8 seconds for a ten minute
+    /// clip, and 4.4 seconds for an hour long one that was then rejected anyway. The
+    /// window did not redraw, the grid did not scroll, and nothing said why.
+    ///
+    /// A clip already in the cache returns without ever awaiting, so the common press
+    /// still reaches the mixer in the same message pump turn and stays instant.
+    /// </summary>
+    private async Task<CachedSound?> Decode(SoundButtonViewModel vm)
+    {
+        var path = vm.Model.FilePath;
+
+        // Keyed by the trim as well as the path: the same file trimmed two ways is two
+        // different pieces of audio and must not share one cache entry.
+        var key = vm.Model.CacheKey;
+
+        if (_cache.TryGet(key, out var cached))
+        {
+            vm.ClearProblem();
+            return cached;
+        }
+
+        // A second press while the first is still decoding must not start a second decode
+        // of the same file, which on a big clip would double the work and the memory.
+        if (!_loading.Add(key)) return null;
+
+        var startMs = vm.Model.StartMs;
+        var endMs = vm.Model.EndMs;
+
+        vm.IsLoading = true;
+        try
+        {
+            var sound = await Task.Run(() => CachedSound.Load(path, startMs, endMs)).ConfigureAwait(true);
+
+            // Back on the UI thread, which is the only thread SoundCache is safe on.
+            _cache.Add(key, sound);
+            vm.ClearProblem();
+            return sound;
+        }
+        catch (Exception ex)
+        {
+            vm.SetProblem(SoundButtonViewModel.DescribeProblem(ex), ex.Message);
+            Status = ex.Message;
+            return null;
+        }
+        finally
+        {
+            vm.IsLoading = false;
+            _loading.Remove(key);
+        }
+    }
 
 
 
@@ -829,6 +945,114 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Reorder();
         Save();
         Status = $"Removed {vm.DisplayName}.";
+    }
+
+    // ---- Library tidying ---------------------------------------------------------
+    //
+    // All three of these change many buttons at once, so all three ask first and name the
+    // exact number. None of them touches a file on disk.
+
+    /// <summary>Drop every button whose audio file is gone.</summary>
+    private void RemoveDead()
+    {
+        var dead = LibraryTidy.FindDead(Sounds.Select(v => v.Model));
+        if (dead.Count == 0)
+        {
+            Status = "Every button still points at a file that exists.";
+            return;
+        }
+
+        if (!Confirm($"Remove {Count(dead.Count, "button")} whose file is missing?\n\n" +
+                     Sample(dead.Select(d => d.DisplayName)) +
+                     "\n\nThe audio files are not touched. Only the buttons go."))
+            return;
+
+        RemoveModels(dead);
+        Status = $"Removed {Count(dead.Count, "dead button")}.";
+    }
+
+    /// <summary>Keep one button per distinct clip and drop the rest.</summary>
+    private void RemoveDuplicates()
+    {
+        Status = "Checking for duplicates...";
+
+        var groups = LibraryTidy.FindDuplicates(Sounds.Select(v => v.Model));
+        var extras = groups.SelectMany(g => g.Skip(1)).ToList();
+
+        if (extras.Count == 0)
+        {
+            Status = "No duplicates. Every button is a different clip.";
+            return;
+        }
+
+        if (!Confirm($"{Count(groups.Count, "clip")} appear more than once. " +
+                     $"Remove the {Count(extras.Count, "extra button")}?\n\n" +
+                     Sample(extras.Select(d => d.DisplayName)) +
+                     "\n\nOne button is kept for each clip, and no audio file is deleted."))
+            return;
+
+        RemoveModels(extras);
+        Status = $"Removed {Count(extras.Count, "duplicate")}, kept one of each.";
+    }
+
+    /// <summary>Clean download artefacts out of labels that were never renamed by hand.</summary>
+    private void TidyNames()
+    {
+        var plan = LibraryTidy.PlanNameTidy(Sounds.Select(v => v.Model));
+        if (plan.Count == 0)
+        {
+            Status = "Nothing to tidy. Every label is already readable or was set by hand.";
+            return;
+        }
+
+        var preview = string.Join("\n", plan.Take(6).Select(x =>
+            $"{Path.GetFileNameWithoutExtension(x.Sound.FilePath)}\n    becomes  {x.NewName}"));
+
+        if (!Confirm($"Tidy {Count(plan.Count, "label")}?\n\n{preview}" +
+                     (plan.Count > 6 ? $"\n\n...and {plan.Count - 6} more." : "") +
+                     "\n\nLabels you renamed yourself are left alone."))
+            return;
+
+        foreach (var (sound, newName) in plan) sound.Name = newName;
+        foreach (var vm in Sounds) vm.Refresh();
+
+        Save();
+        Status = $"Tidied {Count(plan.Count, "label")}.";
+    }
+
+    private void RemoveModels(IReadOnlyCollection<SoundButton> models)
+    {
+        var doomed = new HashSet<string>(models.Select(m => m.Id), StringComparer.Ordinal);
+
+        foreach (var vm in Sounds.Where(v => doomed.Contains(v.Id)).ToList())
+        {
+            _hotkeys.Unregister(vm.Id);
+            Sounds.Remove(vm);
+        }
+
+        _config.Sounds.RemoveAll(m => doomed.Contains(m.Id));
+        Reorder();
+        Save();
+    }
+
+    /// <summary>
+    /// A yes/no before anything that changes many buttons at once.
+    ///
+    /// Deliberately a real modal. These actions are not undoable from inside the app, and
+    /// a status bar line after the fact is not consent.
+    /// </summary>
+    private static bool Confirm(string message) =>
+        System.Windows.MessageBox.Show(
+            message, "Patchboard",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Question) == System.Windows.MessageBoxResult.Yes;
+
+    private static string Count(int n, string noun) => $"{n} {noun}{(n == 1 ? "" : "s")}";
+
+    private static string Sample(IEnumerable<string> names)
+    {
+        var list = names.Take(6).ToList();
+        return string.Join("\n", list.Select(n => "    " + n));
     }
 
     private void Reorder()

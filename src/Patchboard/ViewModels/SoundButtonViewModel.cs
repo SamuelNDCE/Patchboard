@@ -9,6 +9,7 @@ public sealed class SoundButtonViewModel : ObservableObject
     private double _progress;
     private string? _problem;
     private string? _problemDetail;
+    private bool _isLoading;
 
     public SoundButtonViewModel(SoundButton model)
     {
@@ -36,7 +37,91 @@ public sealed class SoundButtonViewModel : ObservableObject
 
     public bool HasImage => ImagePath is not null;
 
-    public string? Color => Model.Color;
+    /// <summary>
+    /// Tile background as "#RRGGBB", or null for the default surface.
+    ///
+    /// This was saved, exposed and bound to the tile from the start, and nothing in the
+    /// app could set it, so 206 imported buttons were all the same grey. Colour is the
+    /// only way to tell tiles apart at a glance when the labels are long enough to clip.
+    /// </summary>
+    public string? Color
+    {
+        get => Model.Color;
+        set
+        {
+            if (Model.Color == value) return;
+            Model.Color = value;
+            OnPropertyChanged();
+            ColorChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>Raised so the view model that owns persistence can save.</summary>
+    public event Action<SoundButtonViewModel>? ColorChanged;
+
+    /// <summary>
+    /// Start of the kept window, in seconds, as text so it can be typed.
+    ///
+    /// Seconds rather than milliseconds because nobody types 8300, and text rather than a
+    /// slider because the clip length is not known until the file has been opened and a
+    /// slider over an unknown range is not something you can aim.
+    /// </summary>
+    public string StartText
+    {
+        get => Model.StartMs == 0 ? "" : (Model.StartMs / 1000.0).ToString("0.##");
+        set
+        {
+            var ms = ParseSeconds(value);
+            if (ms == Model.StartMs) return;
+            Model.StartMs = ms;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TrimText));
+            TrimChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>End of the kept window, in seconds. Empty means play to the end.</summary>
+    public string EndText
+    {
+        get => Model.EndMs == 0 ? "" : (Model.EndMs / 1000.0).ToString("0.##");
+        set
+        {
+            var ms = ParseSeconds(value);
+            if (ms == Model.EndMs) return;
+            Model.EndMs = ms;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TrimText));
+            TrimChanged?.Invoke(this);
+        }
+    }
+
+    /// <summary>A one line summary of the trim for the menu, or empty when there is none.</summary>
+    public string TrimText => Model.IsTrimmed
+        ? $"Playing {(Model.StartMs / 1000.0):0.##}s to " +
+          (Model.EndMs > 0 ? $"{(Model.EndMs / 1000.0):0.##}s" : "the end")
+        : "";
+
+    public event Action<SoundButtonViewModel>? TrimChanged;
+
+    /// <summary>
+    /// Seconds as typed to whole milliseconds. Anything unparseable, negative or absurd
+    /// becomes 0, which means "no trim on this end" rather than an error dialog: this runs
+    /// on every keystroke in the box.
+    /// </summary>
+    private static int ParseSeconds(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return 0;
+        if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.CurrentCulture, out var seconds)
+            && !double.TryParse(text, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out seconds))
+        {
+            return 0;
+        }
+
+        if (!double.IsFinite(seconds) || seconds <= 0) return 0;
+        return (int)Math.Min(seconds * 1000, int.MaxValue);
+    }
 
     /// <summary>
     /// Per-sound gain, 0 to 2. Above 1 is a real boost for a quiet recording.
@@ -107,6 +192,19 @@ public sealed class SoundButtonViewModel : ObservableObject
 
     public bool HasProblem => _problem is not null;
 
+    /// <summary>
+    /// The clip is being decoded on a background thread after a press.
+    ///
+    /// Only ever true for a clip that is not already in memory, so in practice it shows on
+    /// the first press of a long one. It exists because the alternative to saying "opening"
+    /// is a button that looks like it ignored the click.
+    /// </summary>
+    public bool IsLoading
+    {
+        get => _isLoading;
+        set => Set(ref _isLoading, value);
+    }
+
     /// <summary>The full sentence behind <see cref="Problem"/>, for the tooltip.</summary>
     public string? ProblemDetail
     {
@@ -126,10 +224,11 @@ public sealed class SoundButtonViewModel : ObservableObject
     public static string DescribeProblem(Exception ex) => ex switch
     {
         FileNotFoundException or DirectoryNotFoundException => "file missing",
-        // CachedSound throws this both for a clip past the decode ceiling and for one
-        // that decodes to no audio at all.
-        InvalidOperationException when ex.Message.Contains("longer than") => "too long",
-        InvalidOperationException => "no audio",
+        // Matched on type, not on message text. These used to be one exception type told
+        // apart by searching the message for "longer than", which is the kind of check
+        // that breaks silently the first time someone rewords a sentence.
+        Services.ClipTooLongException => "too long",
+        Services.ClipEmptyException => "no audio",
         UnauthorizedAccessException => "no access",
         _ => "won't play",
     };

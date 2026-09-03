@@ -655,6 +655,251 @@ else
 }
 
 // --------------------------------------------------------------------------
+Section("8d. A DEAD OR OVERLONG BUTTON MUST NOT FREEZE THE WINDOW");
+
+// Decoding runs from the click handler. It used to run ON the UI thread and decode the
+// whole file, so pressing an hour long button locked the window for 4.4 seconds and then
+// reported a failure. Two things fixed it: the length is now read from the header before
+// any decoding, and the decode itself moved to a background thread. This check guards the
+// first half, which is the one that can silently regress.
+{
+    var overLong = new List<(string Path, double Minutes)>();
+    foreach (var sound in config.Sounds.Where(x => File.Exists(x.FilePath)))
+    {
+        try
+        {
+            using var reader = new NAudio.Wave.AudioFileReader(sound.FilePath);
+            if (reader.TotalTime > CachedSound.MaxDuration)
+                overLong.Add((sound.FilePath, reader.TotalTime.TotalMinutes));
+        }
+        catch (Exception) { }
+    }
+
+    if (overLong.Count == 0)
+    {
+        Console.WriteLine("  SKIP  no clip past the decode ceiling in this library");
+    }
+    else
+    {
+        var worstMs = 0L;
+        var allRejected = true;
+
+        foreach (var (path, minutes) in overLong)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var rejected = false;
+            try { CachedSound.Load(path); }
+            catch (ClipTooLongException) { rejected = true; }
+            catch (Exception) { }
+            sw.Stop();
+
+            worstMs = Math.Max(worstMs, sw.ElapsedMilliseconds);
+            allRejected &= rejected;
+        }
+
+        Check($"all {overLong.Count} overlong clips are rejected by type", allRejected,
+            "so the button can say 'too long' rather than 'file missing'");
+
+        // 4400ms before the fix. A generous ceiling, because this is guarding against a
+        // return to decoding the whole file, not policing a few milliseconds.
+        Check("rejecting an overlong clip is immediate, not a four second freeze",
+            worstMs < 400, $"worst {worstMs} ms, was 4393 ms");
+
+        Check("the longest clip is named on the button, not mislabelled as missing",
+            SoundButtonViewModel.DescribeProblem(
+                new ClipTooLongException("x.mp3", TimeSpan.FromMinutes(71), CachedSound.MaxDuration)) == "too long");
+    }
+
+    // A missing file must stay cheap however many times it is pressed.
+    var gone = Path.Combine(Path.GetTempPath(), "patchboard-gone-" + Guid.NewGuid().ToString("N") + ".mp3");
+    var missSw = System.Diagnostics.Stopwatch.StartNew();
+    for (var i = 0; i < 200; i++)
+    {
+        try { CachedSound.Load(gone); } catch (Exception) { }
+    }
+    missSw.Stop();
+    Check("pressing a button whose file is gone stays cheap", missSw.ElapsedMilliseconds < 500,
+        $"200 presses in {missSw.ElapsedMilliseconds} ms");
+}
+
+// --------------------------------------------------------------------------
+Section("8e. LIBRARY TIDYING");
+
+// Names. The risk is not failing to clean, it is mangling something meaningful.
+Check("strips a download id suffix", LibraryTidy.CleanName("bonk_7zPAD7C") == "bonk",
+    LibraryTidy.CleanName("bonk_7zPAD7C"));
+Check("strips an id with no digit in it", LibraryTidy.CleanName("bruh-sound-effect_WstdzdM") == "bruh sound effect",
+    LibraryTidy.CleanName("bruh-sound-effect_WstdzdM"));
+Check("strips a browser copy suffix",
+    LibraryTidy.CleanName("rizz-sounds (1)") == "rizz sounds", LibraryTidy.CleanName("rizz-sounds (1)"));
+Check("strips a ripper site prefix",
+    LibraryTidy.CleanName("Y2meta.app - Top 100 Christmas Songs") == "Top 100 Christmas Songs",
+    LibraryTidy.CleanName("Y2meta.app - Top 100 Christmas Songs"));
+Check("strips a leading track number",
+    LibraryTidy.CleanName("05. I Really Want to Stay at Your House") == "I Really Want to Stay at Your House");
+Check("strips an editor suffix",
+    LibraryTidy.CleanName("eric-andre-mp3cut") == "eric andre", LibraryTidy.CleanName("eric-andre-mp3cut"));
+
+// The things it must NOT do.
+Check("keeps a real word that looks a bit like an id",
+    LibraryTidy.CleanName("scream_reversed") == "scream reversed", LibraryTidy.CleanName("scream_reversed"));
+Check("keeps a short trailing word", LibraryTidy.CleanName("horn_loud") == "horn loud");
+Check("leaves an already clean name alone", LibraryTidy.CleanName("all my fellas") == "all my fellas");
+Check("leaves a GUID filename alone rather than making it worse",
+    LibraryTidy.CleanName("53b1bab6-a8c3-4a1a-82db-7110ce1c29ef") == "53b1bab6-a8c3-4a1a-82db-7110ce1c29ef");
+Check("never returns an empty label", LibraryTidy.CleanName("(1)").Length > 0, LibraryTidy.CleanName("(1)"));
+
+// A label the user typed is a decision and must survive a bulk tidy.
+var handNamed = new SoundButton { FilePath = @"C:\x\bonk_7zPAD7C.mp3", Name = "BONK" };
+var untouched = new SoundButton { FilePath = @"C:\x\bonk_7zPAD7C.mp3", Name = "bonk_7zPAD7C" };
+Check("a hand written label is left alone", !LibraryTidy.IsUntouchedName(handNamed));
+Check("an untouched label is fair game", LibraryTidy.IsUntouchedName(untouched));
+Check("the tidy plan skips hand written labels",
+    LibraryTidy.PlanNameTidy([handNamed, untouched]).Count == 1);
+
+// Duplicates must be decided on content, never on size alone.
+var realPlan = LibraryTidy.PlanNameTidy(config.Sounds);
+Check("the plan leaves his 43 hand written labels alone",
+    config.Sounds.Count(LibraryTidy.IsUntouchedName) >= realPlan.Count,
+    $"{realPlan.Count} of {config.Sounds.Count} labels would change");
+
+var dupeGroups = LibraryTidy.FindDuplicates(config.Sounds);
+Check("duplicate detection confirms by content, not just by file size",
+    dupeGroups.All(g => g.Select(x => new FileInfo(x.FilePath).Length).Distinct().Count() == 1),
+    $"{dupeGroups.Count} genuine group(s); two unrelated 78KB files are correctly not paired");
+Check("every duplicate group keeps exactly one button",
+    dupeGroups.All(g => g.Count > 1), "a group of one is not a duplicate");
+
+var deadFound = LibraryTidy.FindDead(config.Sounds);
+Check("dead button detection agrees with the config check",
+    deadFound.Count == config.Sounds.Count(x => !File.Exists(x.FilePath)),
+    $"{deadFound.Count} dead");
+
+// --------------------------------------------------------------------------
+Section("8f. TRIM, which is what makes a long recording usable at all");
+
+{
+    var longClip = config.Sounds.FirstOrDefault(x =>
+    {
+        try
+        {
+            using var r = new NAudio.Wave.AudioFileReader(x.FilePath);
+            return r.TotalTime > CachedSound.MaxDuration;
+        }
+        catch (Exception) { return false; }
+    });
+
+    if (longClip is null)
+    {
+        Console.WriteLine("  SKIP  no clip past the ceiling to trim");
+    }
+    else
+    {
+        // The whole point: a file that can never play in full plays as a short window.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        CachedSound? trimmed = null;
+        string outcome;
+        try
+        {
+            trimmed = CachedSound.Load(longClip.FilePath, 30_000, 38_000);
+            outcome = $"{trimmed.Duration.TotalSeconds:0.0}s";
+        }
+        catch (Exception ex) { outcome = ex.GetType().Name; }
+        sw.Stop();
+
+        Check("an hour long clip plays once trimmed to eight seconds",
+            trimmed is not null && Math.Abs(trimmed.Duration.TotalSeconds - 8) < 0.5,
+            $"{outcome} in {sw.ElapsedMilliseconds} ms");
+
+        Check("only the kept window is decoded, so it is cheap",
+            sw.ElapsedMilliseconds < 2000, $"{sw.ElapsedMilliseconds} ms");
+
+        Check("the same file untrimmed is still refused",
+            Throws<ClipTooLongException>(() => CachedSound.Load(longClip.FilePath)));
+    }
+
+    // Trimming an ordinary clip takes the window asked for, from the point asked for.
+    var ordinary = config.Sounds.FirstOrDefault(x =>
+    {
+        try
+        {
+            using var r = new NAudio.Wave.AudioFileReader(x.FilePath);
+            return r.TotalTime.TotalSeconds is > 12 and < 240;
+        }
+        catch (Exception) { return false; }
+    });
+
+    if (ordinary is null)
+    {
+        Console.WriteLine("  SKIP  no clip long enough to trim meaningfully");
+    }
+    else
+    {
+        var whole = CachedSound.Load(ordinary.FilePath);
+        var window = CachedSound.Load(ordinary.FilePath, 2_000, 5_000);
+
+        Check("a trimmed window is the requested length",
+            Math.Abs(window.Duration.TotalSeconds - 3) < 0.25,
+            $"{window.Duration.TotalSeconds:0.00}s of a {whole.Duration.TotalSeconds:0.0}s clip");
+
+        Check("it starts where it was told to, not at zero",
+            !window.AudioData.Take(2000).SequenceEqual(whole.AudioData.Take(2000))
+            || whole.AudioData.Take(2000).All(v => v == 0f),
+            "the first samples differ from the untrimmed clip");
+
+        // An end before the start, or past the file, must fall back rather than produce
+        // silence or throw, because a hand edited config can contain either.
+        // An end before the start: only the end is nonsense, so only the end is discarded.
+        // Throwing away the valid start too would silently ignore half of what was typed.
+        var backwards = CachedSound.Load(ordinary.FilePath, 9_000, 3_000);
+        var expected = whole.Duration.TotalSeconds - 9;
+        Check("a backwards trim keeps the valid start and drops only the bad end",
+            Math.Abs(backwards.Duration.TotalSeconds - expected) < 0.25,
+            $"{backwards.Duration.TotalSeconds:0.0}s, expected {expected:0.0}s");
+
+        var beyond = CachedSound.Load(ordinary.FilePath, 0, 9_999_000);
+        Check("an end past the file falls back to the file's end",
+            Math.Abs(beyond.Duration.TotalSeconds - whole.Duration.TotalSeconds) < 0.25);
+
+        var startPastEnd = CachedSound.Load(ordinary.FilePath, 9_999_000, 0);
+        Check("a start past the file falls back to the beginning",
+            Math.Abs(startPastEnd.Duration.TotalSeconds - whole.Duration.TotalSeconds) < 0.25);
+    }
+
+    // Two trims of one file are different audio and must not share a cache entry.
+    var a = new SoundButton { FilePath = @"C:\x\clip.mp3", StartMs = 0, EndMs = 0 };
+    var b = new SoundButton { FilePath = @"C:\x\clip.mp3", StartMs = 1000, EndMs = 4000 };
+    var c = new SoundButton { FilePath = @"C:\x\clip.mp3", StartMs = 1000, EndMs = 9000 };
+    Check("an untrimmed button keys on the plain path", a.CacheKey == a.FilePath);
+    Check("two different trims of one file are different cache entries",
+        b.CacheKey != c.CacheKey && b.CacheKey != a.CacheKey);
+    Check("trim state is reported", !a.IsTrimmed && b.IsTrimmed);
+}
+
+// --------------------------------------------------------------------------
+Section("8g. BUTTON COLOUR, which was saved and bound but unreachable");
+
+{
+    var model = new SoundButton { FilePath = @"C:\x\a.mp3", Name = "a" };
+    var vm = new SoundButtonViewModel(model);
+    var raised = 0;
+    vm.ColorChanged += _ => raised++;
+
+    Check("a new button has no colour", vm.Color is null);
+
+    vm.Color = "#3A1F1F";
+    Check("setting a colour reaches the model, which is what gets saved",
+        model.Color == "#3A1F1F" && vm.Color == "#3A1F1F");
+    Check("it tells the owner to save", raised == 1);
+
+    vm.Color = "#3A1F1F";
+    Check("setting the same colour again does not re-save", raised == 1);
+
+    vm.Color = null;
+    Check("clearing goes back to the default surface", model.Color is null && raised == 2);
+}
+
+// --------------------------------------------------------------------------
 Section("8c. FIRST RUN, on a machine that has never saved anything");
 
 // AppConfig.WindowLeft and WindowTop are NaN until a window position has been recorded,
@@ -735,15 +980,19 @@ Check("a genuinely missing file says so",
 // Three of the imported buttons are hour long music rips. They are past the decode
 // ceiling, so they can never play, and every one of them used to report "file missing"
 // and send him looking for a file sitting exactly where he left it.
-var tooLong = new InvalidOperationException(
-    "'mix.mp3' is longer than 20 minutes. Trim it or use a shorter clip.");
+// Matched on exception TYPE now, not by searching the message for "longer than".
+// These two checks used to construct a plain InvalidOperationException with the old
+// wording, which is exactly the coupling the typed exceptions removed.
+var tooLong = new ClipTooLongException("mix.mp3", TimeSpan.FromMinutes(63), CachedSound.MaxDuration);
 Check("a clip past the decode ceiling says it is too long, not missing",
     SoundButtonViewModel.DescribeProblem(tooLong) == "too long",
     SoundButtonViewModel.DescribeProblem(tooLong));
 
 Check("a silent file says it has no audio",
-    SoundButtonViewModel.DescribeProblem(
-        new InvalidOperationException("'x.mp3' decoded to zero audio.")) == "no audio");
+    SoundButtonViewModel.DescribeProblem(new ClipEmptyException("x.mp3")) == "no audio");
+
+Check("an unrecognised failure still gets a label",
+    SoundButtonViewModel.DescribeProblem(new InvalidOperationException("something else")) == "won't play");
 
 var absent = new SoundButtonViewModel(new SoundButton
 {
@@ -765,6 +1014,13 @@ Console.WriteLine(new string('-', 60));
 Console.WriteLine($"PASSED {pass}   FAILED {fail}");
 Console.WriteLine(new string('-', 60));
 
+
+static bool Throws<T>(Action work) where T : Exception
+{
+    try { work(); return false; }
+    catch (T) { return true; }
+    catch (Exception) { return false; }
+}
 
 static long SafeLength(string path)
 {

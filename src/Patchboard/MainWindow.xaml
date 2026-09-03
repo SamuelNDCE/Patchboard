@@ -387,6 +387,49 @@
                     </Grid>
                 </Border>
 
+                <!-- Ticked, but only local hardware, so nobody on the other end hears it.
+                     A different failure from having nothing ticked, and the one that has
+                     actually bitten twice. Amber rather than red: the app is working, the
+                     routing just does not leave this machine. -->
+                <Border Grid.Row="1"
+                        Background="#1A140A"
+                        BorderBrush="#5A4A1A"
+                        BorderThickness="1"
+                        CornerRadius="9"
+                        Margin="13,13,13,0"
+                        Padding="16,12"
+                        Visibility="{Binding OnlyLocalOutput, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="Only you can hear this"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="#E0B341" />
+                            <TextBlock Style="{StaticResource Hint}"
+                                       Margin="0,3,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="{Binding LocalOutputNames, StringFormat='Everything ticked is real hardware ({0}), so the sound comes out of your speakers and stops there. Add a virtual cable to send it into Discord or a game.'}" />
+                            <TextBlock Style="{StaticResource Hint}"
+                                       Margin="0,3,0,0"
+                                       TextWrapping="Wrap"
+                                       Text="If you use push to talk, you also have to be holding your talk key while the sound plays, or it still will not go out." />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Style="{StaticResource ToolButton}"
+                                    Command="{Binding UseCableOutputCommand}"
+                                    Visibility="{Binding HasCableOutput, Converter={StaticResource BoolToVis}}"
+                                    Content="Send to Discord"
+                                    ToolTip="{Binding VoiceRouteName, StringFormat='Adds {0}. Check that Discord is listening on it.'}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- Button grid -->
                 <ScrollViewer x:Name="GridScroller"
                               Grid.Row="2"
@@ -492,6 +535,196 @@
                                                                 FontSize="11"
                                                                 Padding="6,6"
                                                                 Command="{Binding PreviewCommand}" />
+                                                    </StackPanel>
+                                                </MenuItem.Header>
+                                            </MenuItem>
+
+                                            <!-- Trim. Two boxes rather than a waveform editor:
+                                                 the job here is "start eight seconds in and
+                                                 stop at twenty", which is two numbers. It is
+                                                 also the only way to use a long recording at
+                                                 all, since only the kept window is decoded. -->
+                                            <MenuItem Style="{StaticResource MenuPanelItem}" StaysOpenOnClick="True">
+                                                <MenuItem.Header>
+                                                    <StackPanel Width="196">
+                                                        <TextBlock Text="Trim (seconds)"
+                                                                   FontSize="11"
+                                                                   Foreground="{StaticResource TextDimBrush}"
+                                                                   Margin="0,0,0,5" />
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="10" />
+                                                                <ColumnDefinition Width="*" />
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBox Grid.Column="0"
+                                                                     Style="{StaticResource TrimBox}"
+                                                                     Text="{Binding StartText, Mode=TwoWay,
+                                                                            UpdateSourceTrigger=PropertyChanged}"
+                                                                     ToolTip="Start. Blank means the beginning." />
+                                                            <TextBlock Grid.Column="1" Text="to"
+                                                                       FontSize="10"
+                                                                       Foreground="{StaticResource TextDimBrush}"
+                                                                       HorizontalAlignment="Center"
+                                                                       VerticalAlignment="Center" />
+                                                            <TextBox Grid.Column="2"
+                                                                     Style="{StaticResource TrimBox}"
+                                                                     Text="{Binding EndText, Mode=TwoWay,
+                                                                            UpdateSourceTrigger=PropertyChanged}"
+                                                                     ToolTip="End. Blank means play to the end." />
+                                                        </Grid>
+                                                        <TextBlock Text="{Binding TrimText}"
+                                                                   FontSize="10"
+                                                                   Foreground="{StaticResource TextDimBrush}"
+                                                                   Margin="0,5,0,0"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   Visibility="{Binding TrimText,
+                                                                               Converter={StaticResource StringToVis}}" />
+                                                    </StackPanel>
+                                                </MenuItem.Header>
+                                            </MenuItem>
+
+                                            <!-- Colour, inline for the same reason volume is:
+                                                 you pick by looking, so the choices have to be
+                                                 visible rather than behind a hover. Eight tints
+                                                 rather than a full picker, because a soundboard
+                                                 needs tiles that are quick to tell apart, not
+                                                 sixteen million shades to choose between. -->
+                                            <MenuItem Style="{StaticResource MenuPanelItem}" StaysOpenOnClick="True">
+                                                <MenuItem.Header>
+                                                    <StackPanel Width="196">
+                                                        <TextBlock Text="Colour"
+                                                                   FontSize="11"
+                                                                   Foreground="{StaticResource TextDimBrush}"
+                                                                   Margin="0,0,0,6" />
+                                                        <WrapPanel>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#3A1F1F"
+                                                                    ToolTip="Red"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#3A1F1F</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#3A2A15"
+                                                                    ToolTip="Amber"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#3A2A15</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#2A331B"
+                                                                    ToolTip="Olive"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#2A331B</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#153331"
+                                                                    ToolTip="Teal"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#153331</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#1B2A3E"
+                                                                    ToolTip="Blue"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#1B2A3E</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#2C2140"
+                                                                    ToolTip="Purple"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#2C2140</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#3A1F30"
+                                                                    ToolTip="Pink"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#3A1F30</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="#2E2E2E"
+                                                                    ToolTip="Grey"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String>#2E2E2E</sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                            <Button Width="20" Height="20" Margin="0,0,4,4"
+                                                                    Style="{StaticResource Swatch}"
+                                                                    Background="{StaticResource SurfaceBrush}"
+                                                                    ToolTip="No colour"
+                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                <Button.CommandParameter>
+                                                                    <x:Array Type="sys:Object">
+                                                                        <Binding Path="PlacementTarget.DataContext"
+                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
+                                                                        <sys:String></sys:String>
+                                                                    </x:Array>
+                                                                </Button.CommandParameter>
+                                                            </Button>
+                                                        </WrapPanel>
                                                     </StackPanel>
                                                 </MenuItem.Header>
                                             </MenuItem>
@@ -670,9 +903,35 @@
                     <Button Style="{StaticResource ToolButton}"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
-                            Margin="0,0,0,20"
+                            Margin="0,0,0,8"
                             Command="{Binding ImportFolderCommand}"
                             Content="Import a folder of sounds" />
+
+                    <!-- Cleanup for a library that arrived by the hundred. Each one asks
+                         first and names the count; none of them deletes an audio file. -->
+                    <Button Style="{StaticResource ToolButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,8"
+                            Command="{Binding TidyNamesCommand}"
+                            Content="Tidy up labels"
+                            ToolTip="Strips download leftovers like (1), site prefixes and id suffixes. Leaves anything you renamed yourself alone." />
+
+                    <Button Style="{StaticResource ToolButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,8"
+                            Command="{Binding RemoveDuplicatesCommand}"
+                            Content="Remove duplicate sounds"
+                            ToolTip="Finds buttons pointing at byte identical audio and keeps one of each." />
+
+                    <Button Style="{StaticResource ToolButton}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Margin="0,0,0,20"
+                            Command="{Binding RemoveDeadCommand}"
+                            Content="Remove buttons with missing files"
+                            ToolTip="Clears out buttons whose audio file is no longer on disk." />
 
                     <TextBlock Style="{StaticResource PanelHeader}" Text="AUDIO" />
 
