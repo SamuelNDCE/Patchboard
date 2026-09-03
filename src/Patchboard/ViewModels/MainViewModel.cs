@@ -92,11 +92,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CancelRenameCommand = new RelayCommand(CancelRename);
         SetImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PickImage(vm); });
         ClearImageCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) ClearImage(vm); });
-        SetColorCommand = new RelayCommand(SetColor);
         BeginBindHotkeyCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) BeginBind(vm); });
         ClearHotkeyCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) ClearHotkey(vm); });
         RefreshDevicesCommand = new RelayCommand(() => { RefreshDevices(); ApplyOutputs(); ApplyMic(); });
-        ImportResananceCommand = new RelayCommand(ImportResanance);
         ImportFolderCommand = new RelayCommand(ImportFolder);
         RemoveDeadCommand = new RelayCommand(RemoveDead);
         RemoveDuplicatesCommand = new RelayCommand(RemoveDuplicates);
@@ -104,6 +102,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         UseDefaultOutputCommand = new RelayCommand(() => EnableOutput(Outputs.FirstOrDefault(o => o.IsDefault)));
         UseCableOutputCommand = new RelayCommand(() => EnableOutput(VoiceRoute));
         MuteMicCommand = new RelayCommand(MuteMic);
+        DismissRoutingNoticeCommand = new RelayCommand(() =>
+        {
+            _routingNoticeDismissed = true;
+            NotifyOutputState();
+        });
         PreviewCommand = new RelayCommand(p => { if (p is SoundButtonViewModel vm) PreviewInHeadphones(vm); });
         ToggleSettingsCommand = new RelayCommand(() => SettingsOpen = !SettingsOpen);
         ClearSearchCommand = new RelayCommand(() => SearchText = "");
@@ -161,11 +164,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public RelayCommand CancelRenameCommand { get; }
     public RelayCommand SetImageCommand { get; }
     public RelayCommand ClearImageCommand { get; }
-    public RelayCommand SetColorCommand { get; }
     public RelayCommand BeginBindHotkeyCommand { get; }
     public RelayCommand ClearHotkeyCommand { get; }
     public RelayCommand RefreshDevicesCommand { get; }
-    public RelayCommand ImportResananceCommand { get; }
     public RelayCommand ImportFolderCommand { get; }
     public RelayCommand RemoveDeadCommand { get; }
     public RelayCommand RemoveDuplicatesCommand { get; }
@@ -407,21 +408,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         Status = $"{vm.DisplayName} at {vm.VolumeText}.";
     }
 
-    /// <summary>
-    /// Paint one button, or clear it back to the default surface.
-    ///
-    /// The parameter arrives from the swatch as "vm|#RRGGBB", or "vm|" to clear, because a
-    /// WPF command carries a single parameter and the alternative was a command per colour.
-    /// </summary>
-    private void SetColor(object? parameter)
-    {
-        if (parameter is not object[] { Length: 2 } pair) return;
-        if (pair[0] is not SoundButtonViewModel vm) return;
-
-        var colour = pair[1] as string;
-        vm.Color = string.IsNullOrWhiteSpace(colour) ? null : colour;
-    }
-
     private void OnSoundColorChanged(SoundButtonViewModel vm)
     {
         Save();
@@ -579,21 +565,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool HasNoOutput => Outputs.All(o => !o.IsEnabled);
 
     /// <summary>
-    /// Something is ticked, but everything ticked is real hardware, so the sound comes out
-    /// of speakers or headphones and reaches nobody else.
+    /// Something is ticked, but nothing ticked is a virtual cable.
     ///
-    /// This is a completely different failure from having nothing ticked, and it is the
-    /// one that actually happened twice. Resanance had exactly this state, which is why it
-    /// "did not work" and why Patchboard exists; then Patchboard ended up in it too, with
-    /// only Realtek speakers enabled. In both cases the app looked correctly configured,
-    /// every press made a noise, and not one person on the other end heard anything.
+    /// This is a different failure from having nothing ticked, and it is the one that
+    /// actually happened twice: Resanance was in this state, which is why it "did not
+    /// work" and why Patchboard exists, and then Patchboard ended up in it too.
     ///
-    /// Deliberately not raised while nothing is ticked at all, because HasNoOutput already
-    /// covers that and two banners saying different things about the same panel is worse
-    /// than one saying the right thing.
+    /// The wording it drives is deliberately careful. An earlier version announced "only
+    /// you can hear this", and Samuel demonstrated that was false: his speakers feed back
+    /// into Voicemeeter and out on B1, so other people could hear him perfectly well. What
+    /// this app can actually observe is which endpoints it was told to play to. What
+    /// happens after that belongs to Voicemeeter, to Windows, and to whether a microphone
+    /// is picking the room up, none of which is visible from here. So the banner reports
+    /// the fact and lets the user judge, rather than asserting a conclusion it cannot
+    /// check, and it can be dismissed by anyone who already knows better.
     /// </summary>
     public bool OnlyLocalOutput =>
-        !HasNoOutput && Outputs.Where(o => o.IsEnabled).All(o => !o.IsVirtual);
+        !HasNoOutput && !_routingNoticeDismissed && Outputs.Where(o => o.IsEnabled).All(o => !o.IsVirtual);
+
+    private bool _routingNoticeDismissed;
+
+    /// <summary>
+    /// Hide the routing notice for this session.
+    ///
+    /// Not persisted on purpose: the state it describes is one tick box away from changing,
+    /// and a warning silenced forever is one nobody can get back when it matters.
+    /// </summary>
+    public RelayCommand DismissRoutingNoticeCommand { get; }
 
     /// <summary>
     /// Names what is currently ticked, so the warning can never be vague about which
@@ -640,6 +638,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private void NotifyOutputState()
     {
+        // Any change to the output selection is a new situation, so a dismissal from the
+        // previous one should not carry over and hide a warning about this one.
+        if (Outputs.Any(o => o.IsEnabled && o.IsVirtual)) _routingNoticeDismissed = false;
+
         OnPropertyChanged(nameof(HasNoOutput));
         OnPropertyChanged(nameof(OnlyLocalOutput));
         OnPropertyChanged(nameof(LocalOutputNames));
@@ -889,7 +891,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (Directory.Exists(path))
             {
-                // One level deep, matching ResananceImporter.ImportFromFolder rather than
+                // One level deep, matching FolderImporter.ImportFromFolder rather than
                 // recursing without limit. A sound library is a folder of clips with a few
                 // themed subfolders; dropping Downloads on the window used to walk the
                 // entire tree and put a music collection on the board.
@@ -1243,24 +1245,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     // ---- Import -----------------------------------------------------------------
 
-    private void ImportResanance()
-    {
-        if (!ResananceImporter.IsAvailable)
-        {
-            Status = "No Resanance library found on this machine.";
-            return;
-        }
-
-        var result = new ResananceImporter().ImportFromDatabase();
-        Absorb(result, "Resanance");
-    }
 
     private void ImportFolder()
     {
         var dialog = new OpenFolderDialog { Title = "Import a folder of sounds" };
         if (dialog.ShowDialog() != true) return;
 
-        var result = new ResananceImporter().ImportFromFolder(dialog.FolderName);
+        var result = new FolderImporter().ImportFromFolder(dialog.FolderName);
         Absorb(result, Path.GetFileName(dialog.FolderName));
     }
 

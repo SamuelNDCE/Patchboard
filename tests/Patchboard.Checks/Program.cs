@@ -460,9 +460,8 @@ Check("ignores a bare modifier press",
     KeyNames.FromWpfKey(System.Windows.Input.Key.LeftShift, System.Windows.Input.ModifierKeys.Shift) is null);
 
 // --------------------------------------------------------------------------
-Section("7. IMPORT");
+Section("7. FOLDER IMPORT");
 
-Check("sees the Resanance library", ResananceImporter.IsAvailable, ResananceImporter.DatabasePath);
 // Derive the library folder from the config rather than hardcoding a path. A machine
 // specific absolute path in a tracked file breaks on anyone else's machine and puts a
 // username into the repository.
@@ -481,7 +480,7 @@ if (libraryFolder is null)
 }
 else
 {
-    var folderImport = new ResananceImporter().ImportFromFolder(libraryFolder);
+    var folderImport = new FolderImporter().ImportFromFolder(libraryFolder);
     Check("folder import finds sounds in the library folder", folderImport.Imported > 0,
         $"{folderImport.Imported} files in {Path.GetFileName(libraryFolder)}");
 }
@@ -776,6 +775,58 @@ Check("dead button detection agrees with the config check",
     $"{deadFound.Count} dead");
 
 // --------------------------------------------------------------------------
+Section("8h. XAML THAT COMPILES BUT CANNOT RENDER");
+
+// A Binding inside an x:Array compiles perfectly and then throws during layout:
+// "A 'Binding' cannot be used within an 'ArrayList' collection. A 'Binding' can only be
+// set on a DependencyProperty of a DependencyObject." It shipped once, in the colour
+// swatches, and only surfaced when the right click menu was first opened. The build says
+// nothing, so this has to be checked rather than compiled.
+{
+    var xamlRoot = FindRepoDirectory("src");
+    if (xamlRoot is null)
+    {
+        Console.WriteLine("  SKIP  cannot locate the source tree from the test binary");
+    }
+    else
+    {
+        var files = Directory.GetFiles(xamlRoot, "*.xaml", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                        && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .ToList();
+
+        var offenders = new List<string>();
+        var unreadable = new List<string>();
+
+        foreach (var file in files)
+        {
+            try
+            {
+                var doc = System.Xml.Linq.XDocument.Load(file);
+                foreach (var array in doc.Descendants()
+                             .Where(e => e.Name.LocalName == "Array"))
+                {
+                    if (array.Descendants().Any(d => d.Name.LocalName == "Binding"
+                                                     || d.Name.LocalName == "MultiBinding"))
+                    {
+                        offenders.Add($"{Path.GetFileName(file)}: Binding inside x:Array");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                unreadable.Add($"{Path.GetFileName(file)}: {ex.Message}");
+            }
+        }
+
+        Check("every XAML file parses as XML", unreadable.Count == 0,
+            unreadable.Count > 0 ? unreadable[0] : $"{files.Count} files");
+        Check("no Binding is trapped inside an x:Array", offenders.Count == 0,
+            offenders.Count > 0 ? offenders[0] : "this threw at layout time, not at build time");
+    }
+}
+
+// --------------------------------------------------------------------------
 Section("8f. TRIM, which is what makes a long recording usable at all");
 
 {
@@ -864,6 +915,71 @@ Section("8f. TRIM, which is what makes a long recording usable at all");
         var startPastEnd = CachedSound.Load(ordinary.FilePath, 9_999_000, 0);
         Check("a start past the file falls back to the beginning",
             Math.Abs(startPastEnd.Duration.TotalSeconds - whole.Duration.TotalSeconds) < 0.25);
+    }
+
+    // The slider path. Duration has to be known before a trim can be aimed, and the two
+    // handles must never cross: a zero length window decodes to nothing and the button
+    // goes silent with no explanation.
+    var slidered = config.Sounds.FirstOrDefault(x =>
+    {
+        try
+        {
+            using var r = new NAudio.Wave.AudioFileReader(x.FilePath);
+            return r.TotalTime.TotalSeconds is > 12 and < 240;
+        }
+        catch (Exception) { return false; }
+    });
+
+    if (slidered is not null)
+    {
+        var vm = new SoundButtonViewModel(new SoundButton { FilePath = slidered.FilePath, Name = "t" });
+
+        Check("a button starts with no known length", !vm.HasDuration, vm.DurationText);
+
+        // Awaited rather than polled. The first version marshalled through
+        // Dispatcher.CurrentDispatcher, which never runs in a console harness because
+        // nothing pumps messages, so this check sat at zero for four seconds and failed
+        // against code that worked perfectly inside the app.
+        vm.EnsureDurationAsync().GetAwaiter().GetResult();
+
+        Check("the clip length is read so the sliders have a range", vm.HasDuration,
+            $"{vm.DurationSeconds:0.0}s");
+
+        if (vm.HasDuration)
+        {
+            Check("an untrimmed button reads as the whole clip",
+                !vm.IsTrimmed && Math.Abs(vm.EndSeconds - vm.DurationSeconds) < 0.01,
+                vm.TrimText);
+
+            vm.StartSeconds = 3;
+            vm.EndSeconds = 8;
+            Check("dragging both handles keeps the window", vm.IsTrimmed
+                && Math.Abs(vm.StartSeconds - 3) < 0.01 && Math.Abs(vm.EndSeconds - 8) < 0.01,
+                vm.TrimText);
+
+            // Push the start past the end. It must stop short, not swap them or collapse.
+            vm.StartSeconds = 20;
+            Check("the start cannot be dragged past the end",
+                vm.StartSeconds < vm.EndSeconds && vm.EndSeconds - vm.StartSeconds > 0.05,
+                $"start {vm.StartSeconds:0.00}s, end {vm.EndSeconds:0.00}s");
+
+            vm.StartSeconds = 3;
+            vm.EndSeconds = 0;
+            Check("the end cannot be dragged past the start",
+                vm.EndSeconds > vm.StartSeconds, $"end {vm.EndSeconds:0.00}s");
+
+            // Dragged to the far end means "to the end of the file", stored as 0 so it does
+            // not go stale if the file is later replaced by a longer one.
+            vm.StartSeconds = 0;
+            vm.EndSeconds = vm.DurationSeconds;
+            Check("dragging the end to the far right means 'play to the end'",
+                vm.Model.EndMs == 0 && !vm.IsTrimmed, vm.TrimText);
+
+            vm.StartSeconds = 5;
+            vm.ClearTrimCommand.Execute(null);
+            Check("'use the whole clip' puts it back",
+                !vm.IsTrimmed && vm.Model.StartMs == 0 && vm.Model.EndMs == 0, vm.TrimText);
+        }
     }
 
     // Two trims of one file are different audio and must not share a cache entry.
@@ -1014,6 +1130,24 @@ Console.WriteLine(new string('-', 60));
 Console.WriteLine($"PASSED {pass}   FAILED {fail}");
 Console.WriteLine(new string('-', 60));
 
+
+/// <summary>
+/// Walk up from the test binary to the repository and return one of its directories.
+/// The binary sits in tests/Patchboard.Checks/bin/Release/net9.0-windows, and the depth
+/// changes with configuration, so it is searched for rather than counted.
+/// </summary>
+static string? FindRepoDirectory(string name)
+{
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    for (var i = 0; i < 8 && dir is not null; i++, dir = dir.Parent)
+    {
+        var candidate = Path.Combine(dir.FullName, name);
+        if (Directory.Exists(candidate) && Directory.Exists(Path.Combine(dir.FullName, "tests")))
+            return candidate;
+    }
+
+    return null;
+}
 
 static bool Throws<T>(Action work) where T : Exception
 {

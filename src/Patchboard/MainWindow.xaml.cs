@@ -206,6 +206,18 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Ask the button for its clip length just before its menu appears.
+    ///
+    /// The trim sliders need a range, and the range is the clip's duration, which is only
+    /// knowable by opening the file. Doing it here means one header read per button, on
+    /// demand, rather than 206 of them at startup.
+    /// </summary>
+    private void OnTileContextMenuOpening(object sender, System.Windows.Controls.ContextMenuEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SoundButtonViewModel vm) _ = vm.EnsureDurationAsync();
+    }
+
     // ---- Rename -------------------------------------------------------------------
 
     private void OnRenameVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)

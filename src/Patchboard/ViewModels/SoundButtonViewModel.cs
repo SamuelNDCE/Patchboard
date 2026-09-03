@@ -60,68 +60,171 @@ public sealed class SoundButtonViewModel : ObservableObject
     public event Action<SoundButtonViewModel>? ColorChanged;
 
     /// <summary>
-    /// Start of the kept window, in seconds, as text so it can be typed.
+    /// Paint this button. The parameter is "#RRGGBB", or empty to clear.
     ///
-    /// Seconds rather than milliseconds because nobody types 8300, and text rather than a
-    /// slider because the clip length is not known until the file has been opened and a
-    /// slider over an unknown range is not something you can aim.
+    /// It lives here rather than on MainViewModel because the context menu inherits its
+    /// DataContext from the tile, so this view model is already in scope and the colour is
+    /// the only other thing needed. The first attempt routed it through MainViewModel and
+    /// had to carry the target and the colour together in an x:Array, which WPF rejects at
+    /// layout time: a Binding cannot live inside an ArrayList, only on a DependencyProperty.
     /// </summary>
-    public string StartText
+    public RelayCommand SetColorCommand => _setColor ??= new RelayCommand(
+        parameter => Color = parameter as string is { Length: > 0 } hex ? hex : null);
+
+    private RelayCommand? _setColor;
+
+    // ---- Trim -------------------------------------------------------------------
+    //
+    // Sliders over the real clip length, not typed numbers. Typing a millisecond offset
+    // means knowing where in the clip the moment is, which is the thing you were trying to
+    // find in the first place. The length has to be read off the file before any of this
+    // can be aimed, so the sliders stay disabled until it is known.
+
+    private double _durationSeconds;
+    private bool _durationRequested;
+
+    /// <summary>Full length of the file in seconds, or 0 until it has been read.</summary>
+    public double DurationSeconds
     {
-        get => Model.StartMs == 0 ? "" : (Model.StartMs / 1000.0).ToString("0.##");
+        get => _durationSeconds;
+        private set
+        {
+            if (!Set(ref _durationSeconds, value)) return;
+            OnPropertyChanged(nameof(HasDuration));
+            OnPropertyChanged(nameof(DurationText));
+            OnPropertyChanged(nameof(StartSeconds));
+            OnPropertyChanged(nameof(EndSeconds));
+            OnPropertyChanged(nameof(TrimText));
+        }
+    }
+
+    public bool HasDuration => _durationSeconds > 0;
+
+    public string DurationText => _durationSeconds > 0 ? $"{_durationSeconds:0.0}s long" : "reading length...";
+
+    /// <summary>
+    /// Read the clip's length so the sliders have a range.
+    ///
+    /// Off the UI thread and only once per button. It is a header read rather than a
+    /// decode, so it is milliseconds, but it is still file IO reached from opening a menu
+    /// and there is no reason to make the menu wait for a disk.
+    /// </summary>
+    public async Task EnsureDurationAsync()
+    {
+        if (_durationRequested || HasProblem) return;
+        _durationRequested = true;
+
+        var path = Model.FilePath;
+
+        var seconds = await Task.Run(() =>
+        {
+            try
+            {
+                using var reader = new NAudio.Wave.AudioFileReader(path);
+                return reader.TotalTime.TotalSeconds;
+            }
+            catch (Exception)
+            {
+                return 0d;
+            }
+        }).ConfigureAwait(true);
+
+        if (seconds > 0) DurationSeconds = seconds;
+    }
+
+    /// <summary>Start of the kept window, in seconds.</summary>
+    public double StartSeconds
+    {
+        get => Model.StartMs / 1000.0;
         set
         {
-            var ms = ParseSeconds(value);
+            var seconds = Clamp(value);
+
+            // Never let the start cross the end. A zero length window would decode to
+            // nothing and the button would go silent with no explanation.
+            var end = Model.EndMs > 0 ? Model.EndMs / 1000.0 : _durationSeconds;
+            if (end > 0 && seconds > end - MinWindowSeconds) seconds = Math.Max(0, end - MinWindowSeconds);
+
+            var ms = (int)Math.Round(seconds * 1000);
             if (ms == Model.StartMs) return;
+
             Model.StartMs = ms;
             OnPropertyChanged();
             OnPropertyChanged(nameof(TrimText));
+            OnPropertyChanged(nameof(IsTrimmed));
             TrimChanged?.Invoke(this);
         }
     }
 
-    /// <summary>End of the kept window, in seconds. Empty means play to the end.</summary>
-    public string EndText
+    /// <summary>
+    /// End of the kept window, in seconds. Stored as 0 when it sits at the end of the
+    /// file, so a clip that is later replaced by a longer one still plays in full.
+    /// </summary>
+    public double EndSeconds
     {
-        get => Model.EndMs == 0 ? "" : (Model.EndMs / 1000.0).ToString("0.##");
+        get => Model.EndMs > 0 ? Model.EndMs / 1000.0 : _durationSeconds;
         set
         {
-            var ms = ParseSeconds(value);
+            var seconds = Clamp(value);
+
+            var start = Model.StartMs / 1000.0;
+            if (seconds < start + MinWindowSeconds) seconds = start + MinWindowSeconds;
+
+            // Dragged to the far end means "play to the end", which is 0 rather than a
+            // number that would go stale if the file changed.
+            var atEnd = _durationSeconds > 0 && seconds >= _durationSeconds - 0.05;
+            var ms = atEnd ? 0 : (int)Math.Round(seconds * 1000);
             if (ms == Model.EndMs) return;
+
             Model.EndMs = ms;
             OnPropertyChanged();
             OnPropertyChanged(nameof(TrimText));
+            OnPropertyChanged(nameof(IsTrimmed));
             TrimChanged?.Invoke(this);
         }
     }
 
-    /// <summary>A one line summary of the trim for the menu, or empty when there is none.</summary>
-    public string TrimText => Model.IsTrimmed
-        ? $"Playing {(Model.StartMs / 1000.0):0.##}s to " +
-          (Model.EndMs > 0 ? $"{(Model.EndMs / 1000.0):0.##}s" : "the end")
-        : "";
+    /// <summary>Shortest window worth keeping. Below this a clip is a click.</summary>
+    private const double MinWindowSeconds = 0.1;
+
+    private double Clamp(double seconds)
+    {
+        if (!double.IsFinite(seconds) || seconds < 0) return 0;
+        return _durationSeconds > 0 ? Math.Min(seconds, _durationSeconds) : seconds;
+    }
+
+    public bool IsTrimmed => Model.IsTrimmed;
+
+    /// <summary>What the trim is doing, in words, under the sliders.</summary>
+    public string TrimText
+    {
+        get
+        {
+            if (!HasDuration) return "";
+            if (!Model.IsTrimmed) return $"Whole clip, {_durationSeconds:0.0}s";
+
+            var end = Model.EndMs > 0 ? Model.EndMs / 1000.0 : _durationSeconds;
+            var kept = end - Model.StartMs / 1000.0;
+            return $"{Model.StartMs / 1000.0:0.0}s to {end:0.0}s  ({kept:0.0}s of {_durationSeconds:0.0}s)";
+        }
+    }
+
+    /// <summary>Put the whole clip back.</summary>
+    public RelayCommand ClearTrimCommand => _clearTrim ??= new RelayCommand(() =>
+    {
+        if (!Model.IsTrimmed) return;
+        Model.StartMs = 0;
+        Model.EndMs = 0;
+        OnPropertyChanged(nameof(StartSeconds));
+        OnPropertyChanged(nameof(EndSeconds));
+        OnPropertyChanged(nameof(TrimText));
+        OnPropertyChanged(nameof(IsTrimmed));
+        TrimChanged?.Invoke(this);
+    });
+
+    private RelayCommand? _clearTrim;
 
     public event Action<SoundButtonViewModel>? TrimChanged;
-
-    /// <summary>
-    /// Seconds as typed to whole milliseconds. Anything unparseable, negative or absurd
-    /// becomes 0, which means "no trim on this end" rather than an error dialog: this runs
-    /// on every keystroke in the box.
-    /// </summary>
-    private static int ParseSeconds(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return 0;
-        if (!double.TryParse(text, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.CurrentCulture, out var seconds)
-            && !double.TryParse(text, System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out seconds))
-        {
-            return 0;
-        }
-
-        if (!double.IsFinite(seconds) || seconds <= 0) return 0;
-        return (int)Math.Min(seconds * 1000, int.MaxValue);
-    }
 
     /// <summary>
     /// Per-sound gain, 0 to 2. Above 1 is a real boost for a quiet recording.

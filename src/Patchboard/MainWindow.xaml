@@ -2,7 +2,6 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:Patchboard.ViewModels"
-        xmlns:sys="clr-namespace:System;assembly=System.Runtime"
         Title="Patchboard"
         Icon="app.ico"
         Height="780" Width="1240"
@@ -252,9 +251,21 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
 
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left">
+                            <!-- The app never said its own name anywhere in the window.
+                                 A title bar caption is not enough: people screenshot this
+                                 and stream it, and nothing in the picture said what it was. -->
+                            <TextBlock Text="PATCHBOARD"
+                                       FontFamily="{StaticResource UiFont}"
+                                       FontSize="19"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource TextBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="2,0,20,0" />
+
                         <!-- Fixed width, not MaxWidth with Left alignment: an empty TextBox
                              sizes to its content and collapses to a small blank square. -->
-                        <Grid Grid.Column="0" Width="300" HorizontalAlignment="Left">
+                        <Grid Width="300">
                             <TextBox x:Name="SearchInput"
                                      Style="{StaticResource SearchBox}"
                                      Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged, Mode=TwoWay}"
@@ -277,6 +288,7 @@
                                 </TextBlock.Style>
                             </TextBlock>
                         </Grid>
+                        </StackPanel>
 
                         <StackPanel Grid.Column="1" Orientation="Horizontal">
                             <TextBlock Text="Master"
@@ -406,26 +418,28 @@
                         </Grid.ColumnDefinitions>
 
                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                            <TextBlock Text="Only you can hear this"
+                            <TextBlock Text="No virtual cable selected"
                                        FontSize="13"
                                        FontWeight="SemiBold"
                                        Foreground="#E0B341" />
                             <TextBlock Style="{StaticResource Hint}"
                                        Margin="0,3,0,0"
                                        TextWrapping="Wrap"
-                                       Text="{Binding LocalOutputNames, StringFormat='Everything ticked is real hardware ({0}), so the sound comes out of your speakers and stops there. Add a virtual cable to send it into Discord or a game.'}" />
-                            <TextBlock Style="{StaticResource Hint}"
-                                       Margin="0,3,0,0"
-                                       TextWrapping="Wrap"
-                                       Text="If you use push to talk, you also have to be holding your talk key while the sound plays, or it still will not go out." />
+                                       Text="{Binding LocalOutputNames, StringFormat='Patchboard is only playing to real hardware ({0}). If nobody else can hear you, add a virtual cable. If they can, something outside this app is carrying it: a Voicemeeter bus, or your mic picking up the room.'}" />
                         </StackPanel>
 
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                             <Button Style="{StaticResource ToolButton}"
+                                    Margin="0,0,8,0"
                                     Command="{Binding UseCableOutputCommand}"
                                     Visibility="{Binding HasCableOutput, Converter={StaticResource BoolToVis}}"
-                                    Content="Send to Discord"
+                                    Content="Add a cable"
                                     ToolTip="{Binding VoiceRouteName, StringFormat='Adds {0}. Check that Discord is listening on it.'}" />
+
+                            <Button Style="{StaticResource ToolButton}"
+                                    Command="{Binding DismissRoutingNoticeCommand}"
+                                    Content="I know"
+                                    ToolTip="Hide this for now. It comes back if you change the output selection." />
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -462,6 +476,7 @@
                                         AutomationProperties.Name="{Binding DisplayName}"
                                         AutomationProperties.HelpText="{Binding HotkeyText}"
                                         AllowDrop="True"
+                                        ContextMenuOpening="OnTileContextMenuOpening"
                                         PreviewMouseLeftButtonDown="OnTileMouseDown"
                                         PreviewMouseMove="OnTileMouseMove"
                                         DragOver="OnTileDragOver"
@@ -539,47 +554,58 @@
                                                 </MenuItem.Header>
                                             </MenuItem>
 
-                                            <!-- Trim. Two boxes rather than a waveform editor:
-                                                 the job here is "start eight seconds in and
-                                                 stop at twenty", which is two numbers. It is
-                                                 also the only way to use a long recording at
-                                                 all, since only the kept window is decoded. -->
+                                            <!-- Trim, as sliders over the real clip length.
+                                                 Typed offsets were the first attempt and were
+                                                 the wrong shape: naming a millisecond means
+                                                 already knowing where the moment is, which is
+                                                 the thing you were trying to find. The length
+                                                 is read off the file when the menu opens, so
+                                                 the sliders have something to aim along. -->
                                             <MenuItem Style="{StaticResource MenuPanelItem}" StaysOpenOnClick="True">
                                                 <MenuItem.Header>
                                                     <StackPanel Width="196">
-                                                        <TextBlock Text="Trim (seconds)"
-                                                                   FontSize="11"
-                                                                   Foreground="{StaticResource TextDimBrush}"
-                                                                   Margin="0,0,0,5" />
-                                                        <Grid>
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="*" />
-                                                                <ColumnDefinition Width="10" />
-                                                                <ColumnDefinition Width="*" />
-                                                            </Grid.ColumnDefinitions>
-                                                            <TextBox Grid.Column="0"
-                                                                     Style="{StaticResource TrimBox}"
-                                                                     Text="{Binding StartText, Mode=TwoWay,
-                                                                            UpdateSourceTrigger=PropertyChanged}"
-                                                                     ToolTip="Start. Blank means the beginning." />
-                                                            <TextBlock Grid.Column="1" Text="to"
-                                                                       FontSize="10"
+                                                        <Grid Margin="0,0,0,5">
+                                                            <TextBlock Text="Trim"
+                                                                       FontSize="11"
+                                                                       Foreground="{StaticResource TextDimBrush}" />
+                                                            <TextBlock Text="{Binding DurationText}"
+                                                                       FontSize="11"
                                                                        Foreground="{StaticResource TextDimBrush}"
-                                                                       HorizontalAlignment="Center"
-                                                                       VerticalAlignment="Center" />
-                                                            <TextBox Grid.Column="2"
-                                                                     Style="{StaticResource TrimBox}"
-                                                                     Text="{Binding EndText, Mode=TwoWay,
-                                                                            UpdateSourceTrigger=PropertyChanged}"
-                                                                     ToolTip="End. Blank means play to the end." />
+                                                                       HorizontalAlignment="Right" />
                                                         </Grid>
+
+                                                        <StackPanel IsEnabled="{Binding HasDuration}">
+                                                            <TextBlock Text="Start" FontSize="9"
+                                                                       Foreground="#5A5A5A" Margin="0,0,0,1" />
+                                                            <Slider Style="{StaticResource ThinSlider}"
+                                                                    Minimum="0"
+                                                                    Maximum="{Binding DurationSeconds}"
+                                                                    SmallChange="0.1" LargeChange="1"
+                                                                    Value="{Binding StartSeconds, Mode=TwoWay}" />
+
+                                                            <TextBlock Text="End" FontSize="9"
+                                                                       Foreground="#5A5A5A" Margin="0,6,0,1" />
+                                                            <Slider Style="{StaticResource ThinSlider}"
+                                                                    Minimum="0"
+                                                                    Maximum="{Binding DurationSeconds}"
+                                                                    SmallChange="0.1" LargeChange="1"
+                                                                    Value="{Binding EndSeconds, Mode=TwoWay}" />
+                                                        </StackPanel>
+
                                                         <TextBlock Text="{Binding TrimText}"
                                                                    FontSize="10"
                                                                    Foreground="{StaticResource TextDimBrush}"
-                                                                   Margin="0,5,0,0"
-                                                                   TextTrimming="CharacterEllipsis"
-                                                                   Visibility="{Binding TrimText,
-                                                                               Converter={StaticResource StringToVis}}" />
+                                                                   Margin="0,6,0,0"
+                                                                   TextTrimming="CharacterEllipsis" />
+
+                                                        <Button Style="{StaticResource ToolButton}"
+                                                                Content="Use the whole clip"
+                                                                FontSize="11"
+                                                                Padding="6,5"
+                                                                Margin="0,6,0,0"
+                                                                Command="{Binding ClearTrimCommand}"
+                                                                Visibility="{Binding IsTrimmed,
+                                                                            Converter={StaticResource BoolToVis}}" />
                                                     </StackPanel>
                                                 </MenuItem.Header>
                                             </MenuItem>
@@ -602,128 +628,56 @@
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#3A1F1F"
                                                                     ToolTip="Red"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#3A1F1F</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#3A1F1F" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#3A2A15"
                                                                     ToolTip="Amber"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#3A2A15</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#3A2A15" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#2A331B"
                                                                     ToolTip="Olive"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#2A331B</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#2A331B" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#153331"
                                                                     ToolTip="Teal"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#153331</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#153331" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#1B2A3E"
                                                                     ToolTip="Blue"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#1B2A3E</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#1B2A3E" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#2C2140"
                                                                     ToolTip="Purple"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#2C2140</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#2C2140" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#3A1F30"
                                                                     ToolTip="Pink"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#3A1F30</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#3A1F30" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="#2E2E2E"
                                                                     ToolTip="Grey"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String>#2E2E2E</sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="#2E2E2E" />
                                                             <Button Width="20" Height="20" Margin="0,0,4,4"
                                                                     Style="{StaticResource Swatch}"
                                                                     Background="{StaticResource SurfaceBrush}"
                                                                     ToolTip="No colour"
-                                                                    Command="{Binding PlacementTarget.Tag.SetColorCommand,
-                                                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}">
-                                                                <Button.CommandParameter>
-                                                                    <x:Array Type="sys:Object">
-                                                                        <Binding Path="PlacementTarget.DataContext"
-                                                                                 RelativeSource="{RelativeSource AncestorType=ContextMenu}" />
-                                                                        <sys:String></sys:String>
-                                                                    </x:Array>
-                                                                </Button.CommandParameter>
-                                                            </Button>
+                                                                    Command="{Binding SetColorCommand}"
+                                                                    CommandParameter="" />
                                                         </WrapPanel>
                                                     </StackPanel>
                                                 </MenuItem.Header>
@@ -794,7 +748,7 @@
                                FontSize="15"
                                Foreground="{StaticResource TextDimBrush}"
                                HorizontalAlignment="Center" />
-                    <TextBlock Text="or use Add sounds, or import your Resanance library from Settings"
+                    <TextBlock Text="or use Add sounds, or import a whole folder from Settings"
                                FontSize="11"
                                Foreground="#5A5A5A"
                                Margin="0,6,0,0"
@@ -892,13 +846,6 @@
                                Text="Rows sets how many fit on screen. Anything past that scrolls, so no sound is ever hidden." />
 
                     <TextBlock Style="{StaticResource PanelHeader}" Text="LIBRARY" />
-
-                    <Button Style="{StaticResource ToolButton}"
-                            HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Left"
-                            Margin="0,0,0,8"
-                            Command="{Binding ImportResananceCommand}"
-                            Content="Import from Resanance" />
 
                     <Button Style="{StaticResource ToolButton}"
                             HorizontalAlignment="Stretch"
