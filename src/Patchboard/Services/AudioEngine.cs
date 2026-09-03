@@ -48,7 +48,7 @@ internal sealed class OutputChannel : IDisposable
 /// <summary>A sound currently playing, possibly on several devices at once.</summary>
 public sealed class PlayingSound
 {
-    internal readonly List<(OutputChannel Channel, CachedSoundSampleProvider Provider)> Instances = [];
+    internal readonly List<(OutputChannel Channel, IPlaybackInstance Provider)> Instances = [];
 
     internal PlayingSound(string buttonId, float soundVolume)
     {
@@ -72,10 +72,36 @@ public sealed class PlayingSound
     /// <summary>0 to 1 through the clip, for the progress line under the button.</summary>
     public double Progress => Instances.Count == 0 ? 0 : Instances.Max(i => i.Provider.Progress);
 
+    /// <summary>How far through the clip this sound is, as a time.</summary>
+    public TimeSpan Position => Duration * Progress;
+
+    /// <summary>Total length of the sound being played, after any trim.</summary>
+    public TimeSpan Duration { get; internal init; }
+
+    /// <summary>What is playing, for the transport bar.</summary>
+    public string DisplayName { get; internal init; } = "";
+
     /// <summary>Fade out and end on every device.</summary>
     public void Stop()
     {
         foreach (var (_, provider) in Instances) provider.RequestStop();
+    }
+
+    /// <summary>
+    /// Jump every device's copy to the same fraction through the clip.
+    ///
+    /// They move together rather than independently, because they are one sound as far as
+    /// the listener is concerned and letting them drift would put an echo on it.
+    /// </summary>
+    public void Seek(double fraction)
+    {
+        foreach (var (_, provider) in Instances) provider.Seek(fraction);
+    }
+
+    /// <summary>Release anything the copies hold, such as a streamed file's handle.</summary>
+    internal void DisposeInstances()
+    {
+        foreach (var (_, provider) in Instances) provider.Dispose();
     }
 }
 
@@ -125,7 +151,7 @@ public sealed class AudioEngine : IDisposable
         {
             _latencyMs = Math.Clamp(latencyMs, 20, 500);
 
-            foreach (var sound in _playing) sound.Stop();
+            foreach (var sound in _playing) { sound.Stop(); sound.DisposeInstances(); }
             _playing.Clear();
 
             foreach (var channel in _channels) channel.Dispose();
@@ -284,25 +310,26 @@ public sealed class AudioEngine : IDisposable
     /// </param>
     public PlayingSound? Play(
         string buttonId,
-        CachedSound sound,
+        ISoundSource source,
         float soundVolume,
         RetriggerMode retrigger,
-        string? onlyDeviceId = null)
+        string? onlyDeviceId = null,
+        string displayName = "")
     {
         lock (Gate)
         {
-            _playing.RemoveAll(p => p.IsFinished);
+            Reap();
 
             var existing = _playing.Where(p => p.ButtonId == buttonId).ToList();
             switch (retrigger)
             {
                 case RetriggerMode.Toggle when existing.Count > 0:
-                    foreach (var sounding in existing) sounding.Stop();
+                    foreach (var sounding in existing) { sounding.Stop(); sounding.DisposeInstances(); }
                     _playing.RemoveAll(p => p.ButtonId == buttonId);
                     return null;
 
                 case RetriggerMode.Restart:
-                    foreach (var sounding in existing) sounding.Stop();
+                    foreach (var sounding in existing) { sounding.Stop(); sounding.DisposeInstances(); }
                     _playing.RemoveAll(p => p.ButtonId == buttonId);
                     break;
             }
@@ -313,14 +340,31 @@ public sealed class AudioEngine : IDisposable
 
             if (targets.Count == 0) return null;
 
-            var handle = new PlayingSound(buttonId, Math.Clamp(soundVolume, 0f, SoundButton.MaxVolume));
+            var handle = new PlayingSound(buttonId, Math.Clamp(soundVolume, 0f, SoundButton.MaxVolume))
+            {
+                Duration = source.Duration,
+                DisplayName = displayName,
+            };
+
             foreach (var channel in targets)
             {
-                var provider = new CachedSoundSampleProvider(
-                    sound, handle.SoundVolume * channel.Volume * _masterVolume);
+                // A streamed source opens a file here, which can fail on a drive that has
+                // just gone away. One dead device must not stop the others sounding.
+                IPlaybackInstance provider;
+                try
+                {
+                    provider = source.CreateInstance(handle.SoundVolume * channel.Volume * _masterVolume);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
                 channel.Mixer.AddMixerInput(provider);
                 handle.Instances.Add((channel, provider));
             }
+
+            if (handle.Instances.Count == 0) return null;
 
             _playing.Add(handle);
             return handle;
@@ -332,8 +376,25 @@ public sealed class AudioEngine : IDisposable
     {
         lock (Gate)
         {
-            foreach (var sound in _playing) sound.Stop();
+            foreach (var sound in _playing) { sound.Stop(); sound.DisposeInstances(); }
             _playing.Clear();
+        }
+    }
+
+    /// <summary>
+    /// The sound to show in the transport bar: the most recently started one still going.
+    /// Null when nothing is playing.
+    /// </summary>
+    public PlayingSound? Current
+    {
+        get
+        {
+            lock (Gate)
+            {
+                for (var i = _playing.Count - 1; i >= 0; i--)
+                    if (!_playing[i].IsFinished) return _playing[i];
+                return null;
+            }
         }
     }
 
@@ -343,7 +404,7 @@ public sealed class AudioEngine : IDisposable
         {
             lock (Gate)
             {
-                _playing.RemoveAll(p => p.IsFinished);
+                Reap();
                 return _playing.ToList();
             }
         }
@@ -466,6 +527,21 @@ public sealed class AudioEngine : IDisposable
         return peaks;
     }
 
+    /// <summary>
+    /// Drop finished sounds, releasing whatever their copies hold. A streamed instance
+    /// keeps a file handle and a decoder open, so leaving those to the garbage collector
+    /// would hold files open for as long as it felt like.
+    /// </summary>
+    private void Reap()
+    {
+        for (var i = _playing.Count - 1; i >= 0; i--)
+        {
+            if (!_playing[i].IsFinished) continue;
+            _playing[i].DisposeInstances();
+            _playing.RemoveAt(i);
+        }
+    }
+
     private static string Describe(Exception ex) => ex switch
     {
         COMException com =>
@@ -477,7 +553,7 @@ public sealed class AudioEngine : IDisposable
     {
         lock (Gate)
         {
-            foreach (var sound in _playing) sound.Stop();
+            foreach (var sound in _playing) { sound.Stop(); sound.DisposeInstances(); }
             _playing.Clear();
             foreach (var channel in _channels) channel.Dispose();
             _channels.Clear();

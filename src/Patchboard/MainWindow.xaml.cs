@@ -218,6 +218,20 @@ public partial class MainWindow : Window
         if ((sender as FrameworkElement)?.DataContext is SoundButtonViewModel vm) _ = vm.EnsureDurationAsync();
     }
 
+    // ---- Seeking through the playing clip ------------------------------------------
+
+    /// <summary>
+    /// A drag on the seek bar has started, so the timer must stop writing the position.
+    ///
+    /// Without this the tick 17 times a second would keep yanking the thumb back to where
+    /// the audio actually is, and the bar would be impossible to aim.
+    /// </summary>
+    private void OnSeekStarted(object sender, System.Windows.Controls.Primitives.DragStartedEventArgs e) =>
+        _vm.BeginSeek();
+
+    private void OnSeekFinished(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e) =>
+        _vm.EndSeek();
+
     // ---- Rename -------------------------------------------------------------------
 
     private void OnRenameVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)

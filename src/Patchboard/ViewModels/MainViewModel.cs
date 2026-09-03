@@ -480,7 +480,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         // Always Restart for a preview. Stacking copies of the same clip while auditioning
         // it is never what someone wants.
-        _engine.Play(vm.Id, sound, vm.Model.Volume, RetriggerMode.Restart, monitor.Id);
+        _engine.Play(vm.Id, sound, vm.Model.Volume, RetriggerMode.Restart, monitor.Id,
+            displayName: vm.DisplayName);
         Status = $"Previewing {vm.DisplayName} in {monitor.FriendlyName} only.";
     }
 
@@ -708,7 +709,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var sound = await Decode(vm);
         if (sound is null) return;
 
-        var handle = _engine.Play(vm.Id, sound, vm.Model.Volume, vm.Model.Retrigger);
+        var handle = _engine.Play(vm.Id, sound, vm.Model.Volume, vm.Model.Retrigger,
+            displayName: vm.DisplayName);
 
         // A null handle from a Toggle press means it stopped rather than started.
         if (handle is null && vm.Model.Retrigger == RetriggerMode.Toggle) vm.IsPlaying = false;
@@ -727,7 +729,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     /// A clip already in the cache returns without ever awaiting, so the common press
     /// still reaches the mixer in the same message pump turn and stays instant.
     /// </summary>
-    private async Task<CachedSound?> Decode(SoundButtonViewModel vm)
+    private async Task<ISoundSource?> Decode(SoundButtonViewModel vm)
     {
         var path = vm.Model.FilePath;
 
@@ -738,7 +740,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_cache.TryGet(key, out var cached))
         {
             vm.ClearProblem();
-            return cached;
+            return new CachedSoundSource(cached);
         }
 
         // A second press while the first is still decoding must not start a second decode
@@ -751,12 +753,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         vm.IsLoading = true;
         try
         {
-            var sound = await Task.Run(() => CachedSound.Load(path, startMs, endMs)).ConfigureAwait(true);
+            var source = await Task.Run<ISoundSource>(() =>
+            {
+                // Long clips are streamed off the disk instead of decoded into memory.
+                //
+                // There is no length limit any more, which is what Samuel asked for. The
+                // limit existed because decoding an hour of audio to 48kHz stereo float is
+                // about 700MB, and the cache would refuse to hold something that big
+                // anyway, so every press would have decoded it again from scratch. Reading
+                // it as it plays costs a file handle and a decoder per device and nothing
+                // else. Short clips stay in memory, because a soundboard's whole job is
+                // that the ordinary press is instant.
+                using (var probe = new NAudio.Wave.AudioFileReader(path))
+                {
+                    var window = TrimWindow.Resolve(probe.TotalTime, startMs, endMs);
+                    if (window.Length > StreamAbove)
+                        return StreamingSoundSource.Open(path, startMs, endMs);
+                }
+
+                return new CachedSoundSource(CachedSound.Load(path, startMs, endMs));
+            }).ConfigureAwait(true);
 
             // Back on the UI thread, which is the only thread SoundCache is safe on.
-            _cache.Add(key, sound);
+            if (source is CachedSoundSource resident) _cache.Add(key, resident.Sound);
+
             vm.ClearProblem();
-            return sound;
+            return source;
         }
         catch (Exception ex)
         {
@@ -771,6 +793,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Longer than this and a clip is streamed from disk rather than held in memory.
+    ///
+    /// Two minutes of 48kHz stereo float is about 46MB. Below that, decoding is quick and
+    /// keeping it resident makes the second press instant, which is the point of a
+    /// soundboard. Above it, the clip is almost certainly a track rather than an effect,
+    /// nobody is machine gunning it, and holding it would crowd out the clips that are.
+    /// </summary>
+    private static readonly TimeSpan StreamAbove = TimeSpan.FromMinutes(2);
+
 
 
     public void StopAll()
@@ -779,6 +811,85 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         foreach (var sound in Sounds) { sound.IsPlaying = false; sound.Progress = 0; }
         Status = "Stopped.";
     }
+
+    /// <summary>The sound the transport bar is showing, or null when nothing is playing.</summary>
+    public bool HasCurrent => _currentDuration > 0;
+
+    private string _currentName = "";
+    private double _currentDuration;
+    private double _currentPosition;
+    private bool _seeking;
+
+    public string CurrentName
+    {
+        get => _currentName;
+        private set => Set(ref _currentName, value);
+    }
+
+    /// <summary>
+    /// Position through the playing clip, in seconds. Setting this seeks.
+    ///
+    /// Only the seek bar writes here. WPF does not write a value back to the source when
+    /// the source itself pushed it to the target, so every set of this property is a
+    /// person moving the bar, whether they dragged the thumb or clicked the track. The
+    /// timer deliberately does not come through here; it uses ShowPlaybackPosition, which
+    /// updates the same field without seeking. An earlier version gated on a drag flag
+    /// instead, and clicking the track moved the thumb without moving the audio.
+    /// </summary>
+    public double CurrentPosition
+    {
+        get => _currentPosition;
+        set
+        {
+            if (!Set(ref _currentPosition, value)) return;
+            OnPropertyChanged(nameof(CurrentPositionText));
+
+            if (_currentDuration > 0) _engine.Current?.Seek(value / _currentDuration);
+        }
+    }
+
+    /// <summary>
+    /// Move the bar to follow the audio, without treating it as a seek.
+    /// </summary>
+    private void ShowPlaybackPosition(double seconds)
+    {
+        if (Math.Abs(_currentPosition - seconds) < 0.01) return;
+        _currentPosition = seconds;
+        OnPropertyChanged(nameof(CurrentPosition));
+        OnPropertyChanged(nameof(CurrentPositionText));
+    }
+
+    public double CurrentDuration
+    {
+        get => _currentDuration;
+        private set
+        {
+            if (!Set(ref _currentDuration, value)) return;
+            OnPropertyChanged(nameof(HasCurrent));
+            OnPropertyChanged(nameof(CurrentDurationText));
+        }
+    }
+
+    public string CurrentPositionText => FormatTime(_currentPosition);
+
+    public string CurrentDurationText => FormatTime(_currentDuration);
+
+    private static string FormatTime(double seconds) =>
+        seconds >= 3600
+            ? TimeSpan.FromSeconds(seconds).ToString(@"h\:mm\:ss")
+            : TimeSpan.FromSeconds(seconds).ToString(@"m\:ss");
+
+    /// <summary>
+    /// Called while the seek bar is being dragged.
+    ///
+    /// The timer has to stop following the audio during a drag, or every tick would yank
+    /// the thumb back to where playback currently is and the bar would be impossible to
+    /// aim. The seek itself happens through CurrentPosition as the value changes, so a
+    /// drag scrubs rather than jumping only on release.
+    /// </summary>
+    public void BeginSeek() => _seeking = true;
+
+    public void EndSeek() => _seeking = false;
 
     private void OnTick(object? sender, EventArgs e)
     {
@@ -816,6 +927,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         // minimised, which is where a soundboard spends most of its life, this skips a
         // COM call per device seventeen times a second.
         if (!UiVisible) return;
+
+        // Transport bar. Left alone while the bar is being dragged, so the thumb does not
+        // fight the person holding it.
+        var current = _engine.Current;
+        if (current is null)
+        {
+            if (_currentDuration != 0) { CurrentDuration = 0; CurrentName = ""; }
+        }
+        else
+        {
+            CurrentName = current.DisplayName;
+            CurrentDuration = current.Duration.TotalSeconds;
+            if (!_seeking) ShowPlaybackPosition(current.Position.TotalSeconds);
+        }
 
         foreach (var (deviceId, peak) in _engine.ReadOutputPeaks())
         {

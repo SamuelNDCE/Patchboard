@@ -10,7 +10,7 @@ namespace Patchboard.Services;
 /// few dozen bytes. Returning 0 from <see cref="Read"/> makes NAudio's mixer drop it,
 /// which is how finished sounds clean themselves up.
 /// </summary>
-public sealed class CachedSoundSampleProvider : ISampleProvider
+public sealed class CachedSoundSampleProvider : IPlaybackInstance
 {
     /// <summary>
     /// Stopping dead on a non-zero sample makes an audible click, which on a soundboard
@@ -25,13 +25,19 @@ public sealed class CachedSoundSampleProvider : ISampleProvider
     public CachedSoundSampleProvider(CachedSound sound, float volume)
     {
         _sound = sound;
-        Volume = volume;
+        _volume = volume;
     }
 
     public WaveFormat WaveFormat => AudioFormat.Mix;
 
     /// <summary>Live gain for this instance. Safe to set from the UI thread while playing.</summary>
-    public volatile float Volume;
+    private volatile float _volume;
+
+    public float Volume
+    {
+        get => _volume;
+        set => _volume = value;
+    }
 
     /// <summary>True once the clip has run out or a stop fade has completed.</summary>
     public bool IsFinished { get; private set; }
@@ -44,6 +50,24 @@ public sealed class CachedSoundSampleProvider : ISampleProvider
     public void RequestStop()
     {
         if (_fadeRemaining < 0) _fadeRemaining = FadeOutSamples;
+    }
+
+    /// <summary>
+    /// Jump to a fraction of the way through. Snapped to a frame boundary, because landing
+    /// on an odd sample would swap the channels for the rest of the clip.
+    /// </summary>
+    public void Seek(double fraction)
+    {
+        if (IsFinished) return;
+
+        var target = (long)(_sound.AudioData.Length * Math.Clamp(fraction, 0, 1));
+        target -= target % AudioFormat.Channels;
+        _position = Math.Clamp(target, 0, _sound.AudioData.Length);
+    }
+
+    /// <summary>Nothing to release: the samples belong to the shared CachedSound.</summary>
+    public void Dispose()
+    {
     }
 
     public int Read(Span<float> buffer)
@@ -59,7 +83,7 @@ public sealed class CachedSoundSampleProvider : ISampleProvider
         }
 
         var source = _sound.AudioData.AsSpan((int)_position, count);
-        var gain = Volume;
+        var gain = _volume;
 
         if (_fadeRemaining < 0)
         {

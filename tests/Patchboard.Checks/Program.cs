@@ -238,7 +238,7 @@ else
     Check("opens a real WASAPI output", engine.FailedOutputs.Count == 0,
         engine.FailedOutputs.Count > 0 ? engine.FailedOutputs[0].Error : safeTarget.FriendlyName);
 
-    var handle = engine.Play("test-button", decoded[0], 1f, RetriggerMode.Overlap);
+    var handle = engine.Play("test-button", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Overlap);
     Check("play returns a handle", handle is not null);
 
     Thread.Sleep(700);
@@ -253,8 +253,8 @@ else
     Check("stop all clears everything", engine.ActiveSounds.Count == 0);
 
     // Retrigger modes.
-    engine.Play("toggle-button", decoded[0], 1f, RetriggerMode.Toggle);
-    var second = engine.Play("toggle-button", decoded[0], 1f, RetriggerMode.Toggle);
+    engine.Play("toggle-button", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Toggle);
+    var second = engine.Play("toggle-button", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Toggle);
     Check("toggle mode stops on second press", second is null);
 
     engine.StopAll();
@@ -390,19 +390,19 @@ else
 
     previewEngine.SetOutputs(refs, 60);
 
-    var broadcast = previewEngine.Play("b", decoded[0], 1f, RetriggerMode.Overlap);
+    var broadcast = previewEngine.Play("b", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Overlap);
     Check("a normal press reaches every open device",
         broadcast is not null && broadcast.DeviceCount == refs.Count,
         $"{broadcast?.DeviceCount} of {refs.Count}");
     previewEngine.StopAll();
 
-    var preview = previewEngine.Play("p", decoded[0], 1f, RetriggerMode.Restart, micSafeTarget.Id);
+    var preview = previewEngine.Play("p", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Restart, micSafeTarget.Id);
     Check("a preview reaches only the chosen device",
         preview is not null && preview.DeviceCount == 1,
         "this is what keeps a preview out of Discord");
     previewEngine.StopAll();
 
-    var nowhere = previewEngine.Play("x", decoded[0], 1f, RetriggerMode.Overlap, "{not-a-real-device-id}");
+    var nowhere = previewEngine.Play("x", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Overlap, "{not-a-real-device-id}");
     Check("previewing to a device that is not open plays nothing", nowhere is null,
         "silently playing everywhere instead would be the dangerous failure");
 }
@@ -538,7 +538,7 @@ else
 
     if (decoded.Count > 0)
     {
-        loadEngine.Play("footprint", decoded[0], 1f, RetriggerMode.Overlap);
+        loadEngine.Play("footprint", new CachedSoundSource(decoded[0]), 1f, RetriggerMode.Overlap);
         var whilePlaying = InputsOn(loadEngine, micSafeTarget.Id);
         loadEngine.StopAll();
         Thread.Sleep(250);
@@ -990,6 +990,114 @@ Section("8f. TRIM, which is what makes a long recording usable at all");
     Check("two different trims of one file are different cache entries",
         b.CacheKey != c.CacheKey && b.CacheKey != a.CacheKey);
     Check("trim state is reported", !a.IsTrimmed && b.IsTrimmed);
+}
+
+// --------------------------------------------------------------------------
+Section("8i. LONG CLIPS PLAY, by streaming instead of decoding");
+
+{
+    var longClip = config.Sounds.FirstOrDefault(x =>
+    {
+        try
+        {
+            using var r = new NAudio.Wave.AudioFileReader(x.FilePath);
+            return r.TotalTime > TimeSpan.FromMinutes(20);
+        }
+        catch (Exception) { return false; }
+    });
+
+    if (longClip is null)
+    {
+        Console.WriteLine("  SKIP  no clip over twenty minutes in this library");
+    }
+    else
+    {
+        double minutes;
+        using (var r = new NAudio.Wave.AudioFileReader(longClip.FilePath)) minutes = r.TotalTime.TotalMinutes;
+
+        // The headline: this used to be flatly impossible. Decoding an hour of audio is
+        // about 700MB and the cache would refuse to hold it, so every press re-decoded it.
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        StreamingSoundSource? streamed = null;
+        string outcome;
+        try
+        {
+            streamed = StreamingSoundSource.Open(longClip.FilePath, 0, 0);
+            outcome = $"{streamed.Duration.TotalMinutes:0.0} min ready";
+        }
+        catch (Exception ex) { outcome = ex.GetType().Name; }
+        sw.Stop();
+
+        Check($"a {minutes:0} minute clip is playable at all",
+            streamed is not null, $"{outcome} in {sw.ElapsedMilliseconds} ms");
+        Check("opening it is immediate, because nothing is decoded up front",
+            sw.ElapsedMilliseconds < 500, $"{sw.ElapsedMilliseconds} ms");
+
+        if (streamed is not null)
+        {
+            Check("it reports itself as not held in memory", !streamed.IsResident);
+            Check("its length is the real length of the file",
+                Math.Abs(streamed.Duration.TotalMinutes - minutes) < 0.1,
+                $"{streamed.Duration.TotalMinutes:0.0} min");
+
+            // Actually pull audio through it, so this is not just a constructor test.
+            using var instance = streamed.CreateInstance(1f);
+            var buffer = new float[AudioFormat.SampleRate * AudioFormat.Channels / 10];
+            var read = instance.Read(buffer.AsSpan());
+            Check("audio comes out of a streamed clip", read > 0, $"{read} samples");
+
+            // Seeking is the other half of what a long clip needs.
+            instance.Seek(0.5);
+            var afterSeek = instance.Read(buffer.AsSpan());
+            Check("a streamed clip can be seeked into the middle",
+                afterSeek > 0 && instance.Progress is > 0.4 and < 0.6,
+                $"progress {instance.Progress:0.00}");
+
+            instance.Seek(0);
+            Check("and seeked back to the start", instance.Progress < 0.05,
+                $"progress {instance.Progress:0.00}");
+
+            // Memory is the entire justification for streaming, so measure it.
+            var memoryBefore = GC.GetTotalMemory(true);
+            var instances = new List<IPlaybackInstance>();
+            for (var i = 0; i < 3; i++) instances.Add(streamed.CreateInstance(1f));
+            foreach (var inst in instances) inst.Read(buffer.AsSpan());
+            var memoryAfter = GC.GetTotalMemory(false);
+            foreach (var inst in instances) inst.Dispose();
+
+            var mb = (memoryAfter - memoryBefore) / 1024.0 / 1024.0;
+            Check("three devices streaming it cost megabytes, not hundreds",
+                mb < 60, $"{mb:0.0} MB, versus about {minutes * 60 * 48000 * 2 * 4 / 1024 / 1024:0} MB decoded");
+        }
+    }
+
+    // A short clip must still be held in memory, or every press pays disk latency.
+    var shortClip = config.Sounds.FirstOrDefault(x =>
+    {
+        try
+        {
+            using var r = new NAudio.Wave.AudioFileReader(x.FilePath);
+            return r.TotalTime.TotalSeconds is > 1 and < 30;
+        }
+        catch (Exception) { return false; }
+    });
+
+    if (shortClip is not null)
+    {
+        var resident = new CachedSoundSource(CachedSound.Load(shortClip.FilePath));
+        Check("a short clip is still held in memory", resident.IsResident,
+            $"{resident.Duration.TotalSeconds:0.0}s");
+
+        using var a = resident.CreateInstance(1f);
+        using var b = resident.CreateInstance(1f);
+        var buf = new float[4800];
+        a.Read(buf.AsSpan());
+        Check("two copies of a resident clip keep their own positions",
+            a.Progress > 0 && b.Progress == 0);
+
+        a.Seek(0.5);
+        Check("a resident clip can be seeked", a.Progress is > 0.45 and < 0.55, $"{a.Progress:0.00}");
+    }
 }
 
 // --------------------------------------------------------------------------

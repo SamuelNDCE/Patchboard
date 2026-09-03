@@ -237,7 +237,8 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />   <!-- transport, when something plays -->
+                    <RowDefinition Height="Auto" />   <!-- status strip -->
                 </Grid.RowDefinitions>
 
                 <!-- Toolbar -->
@@ -773,7 +774,73 @@
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center" />
 
-                        <!-- His voice is going out wherever the sounds go. If that includes
+                        <!-- Now playing, with a seek bar.
+                     Sitting above the status strip rather than on the tile, because it is
+                     about one sound at a time and a tile is 90 pixels wide. Dragging it
+                     moves every device's copy together: they are one sound to a listener,
+                     and letting them drift would put an echo on it. -->
+                <Border Grid.Row="4"
+                        Background="{StaticResource SurfaceBrush}"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="0,1,0,0"
+                        Padding="13,8"
+                        Visibility="{Binding HasCurrent, Converter={StaticResource BoolToVis}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding CurrentName}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}"
+                                   VerticalAlignment="Center"
+                                   MaxWidth="220"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,0,14,0" />
+
+                        <TextBlock Grid.Column="1"
+                                   Text="{Binding CurrentPositionText}"
+                                   FontSize="11"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="46"
+                                   TextAlignment="Right"
+                                   Margin="0,0,10,0" />
+
+                        <Slider Grid.Column="2"
+                                Style="{StaticResource ThinSlider}"
+                                VerticalAlignment="Center"
+                                Minimum="0"
+                                Maximum="{Binding CurrentDuration}"
+                                Value="{Binding CurrentPosition, Mode=TwoWay}"
+                                Thumb.DragStarted="OnSeekStarted"
+                                Thumb.DragCompleted="OnSeekFinished"
+                                ToolTip="Drag to skip through the clip" />
+
+                        <TextBlock Grid.Column="3"
+                                   Text="{Binding CurrentDurationText}"
+                                   FontSize="11"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   VerticalAlignment="Center"
+                                   Width="46"
+                                   Margin="10,0,10,0" />
+
+                        <Button Grid.Column="4"
+                                Style="{StaticResource ToolButton}"
+                                Padding="10,4"
+                                FontSize="11"
+                                Command="{Binding StopAllCommand}"
+                                Content="Stop" />
+                    </Grid>
+                </Border>
+
+                <!-- His voice is going out wherever the sounds go. If that includes
                              his headphones he will hear himself, and if VoiceMeeter already
                              routes the mic he goes out twice. -->
                         <Border Grid.Column="1"
