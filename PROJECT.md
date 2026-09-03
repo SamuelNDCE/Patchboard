@@ -151,7 +151,11 @@ while the code was correct.
 
 What the checks cannot cover, and is therefore Samuel's to confirm: that a sound is
 audible on the devices HE selects, and anything behind a mouse click (rename dialog,
-drag to reorder, the context menu).
+drag to reorder, the context menu, the colour swatches, the trim boxes).
+
+**A running Patchboard holds its own exe open**, so `publish/` cannot be rebuilt while it is
+running and his shortcuts keep pointing at the old build until he closes it and republishes.
+Check with `Get-Process Patchboard` before claiming a fix has reached him.
 
     dotnet build src/Patchboard/Patchboard.csproj    # must exit 0 with no warnings
 
@@ -178,6 +182,30 @@ Measured on this project, not assumed:
 
 `PublishTrimmed` is not an option. WPF is not trimmable; it builds and then fails at
 runtime when XAML reflects over a type the trimmer removed.
+
+## Never decode on the UI thread
+
+`CachedSound.Load` is called from a button press. It used to run inline, on the UI thread,
+and decode the whole file. Measured on the real library: pressing a 71 minute button locked
+the window for **4393ms** and then reported a failure, because the length check only fired
+once twenty minutes of audio had been decoded. A legitimate ten minute clip blocked for
+1784ms.
+
+Two rules came out of it, and both are checked in section 8d:
+
+- **Read `AudioFileReader.TotalTime` before decoding anything.** Rejecting an over-long clip
+  is a header read, not a decode. Worst case went from 4393ms to 4ms.
+- **Decode on a background thread.** `MainViewModel.Decode` awaits `Task.Run`, and a clip
+  already in `SoundCache` returns without awaiting at all so an ordinary press stays instant.
+
+`SoundCache` is UI-thread-only, so a background decode is added to it after the await, never
+from the worker.
+
+**Trimming interacts with the length limit deliberately.** The limit applies to the window
+kept, not the file it came from, which is what makes an hour long recording usable. Only a
+trimmed clip stops at the header's reported length; an untrimmed one reads to end of stream,
+because a VBR MP3 with no Xing header under-reports its own duration and stopping early
+would silently cut the end off.
 
 ## Staying lightweight
 
