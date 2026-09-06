@@ -30,11 +30,25 @@ Config is plain JSON on disk. Audio goes straight to WASAPI.
   this, so the rule is absolute rather than conditional on whether a game looks like it
   is running: you cannot see what is fullscreen from a tool call.
 
-  What is still allowed: launching the app, `GetWindowRect` plus `CopyFromScreen` to
-  capture **only the app's own window rectangle**, and read-only UI Automation queries
-  scoped to the Patchboard process. What is not: `InvokePattern.Invoke`, `TogglePattern`,
-  `mouse_event`, `SendKeys`, `SetCursorPos`, `SetForegroundWindow`, and full-screen
-  capture, which photographs whatever he is actually doing.
+  What is still allowed: launching the app, `GetClientRect` plus `ClientToScreen` plus
+  `CopyFromScreen` to capture **only the app's own client rectangle**, and read-only UI
+  Automation queries scoped to the Patchboard process. What is not: `InvokePattern.Invoke`,
+  `TogglePattern`, `mouse_event`, `SendKeys`, `SetCursorPos`, `SetForegroundWindow`, and
+  full-screen capture, which photographs whatever he is actually doing.
+
+  **`CopyFromScreen` at a window's own coordinates is not the same as capturing that
+  window.** It reads screen pixels, not window content, so if Patchboard is no longer the
+  frontmost thing at those coordinates (he alt-tabbed away, another window covers it) the
+  capture silently returns whatever IS on top there instead: proven 2026-09-06, when a
+  passive re-capture of an already-open Patchboard window returned his Opera browser
+  instead, bookmarks bar and all, because he had switched to YouTube in between. **Before
+  any `CopyFromScreen` call, read `GetForegroundWindow` first and compare it to the target
+  `hWnd`.** If they don't match, do not capture: say the window is no longer in front and
+  wait, rather than silently photographing whatever replaced it. `GetWindowRect` has the
+  same failure mode as `GetClientRect` here; the fix is the foreground check, not the rect
+  choice, though `GetClientRect` is still preferred over `GetWindowRect` separately because
+  the DWM drop-shadow around the window rect bleeds a few pixels of whatever is directly
+  behind it even when the window genuinely is in front.
 
   Anything needing a real click is Samuel's to test. Say so plainly rather than reaching
   for automation.
