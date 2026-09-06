@@ -8,6 +8,11 @@ you want to hear the sound yourself *and* have it arrive in Discord, and on a ma
 capture card or a second mic you may want it in more places than that. Patchboard decodes a clip
 once and fans the same audio out to every device you tick.
 
+This started as a personal project to replace a soundboard that had stopped working right on
+my own machine, and it's shared here in case it's useful to anyone else who wants one. It's a
+single self-contained executable, no installer, no background service, no telemetry, and it's
+open source under MIT, so you can read every line it runs.
+
 ## The part everyone gets wrong
 
 **A soundboard cannot put sound into Discord on its own.** Windows has no way for an app to
@@ -26,6 +31,11 @@ Either of these works, both are free:
 
 - [VB-Cable](https://vb-audio.com/Cable/). Simplest, installs one cable.
 - [VoiceMeeter](https://vb-audio.com/Voicemeeter/). A full mixer, more setup and more control.
+
+Patchboard does not install either of these for you: they install an audio driver, which is not
+something an app should do silently. Download and install one from the links above, then relaunch
+Patchboard, and it will find it and route to it on its own. If it doesn't, the amber banner's
+**Add a cable** button will pick it up as soon as one is enabled in Windows' Sound settings.
 
 ## Requirements
 

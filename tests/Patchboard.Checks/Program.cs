@@ -1129,7 +1129,7 @@ Section("8m. A FRESH INSTALL PICKS A ROUTE THAT ACTUALLY WORKS");
     static AudioDeviceInfo Dev(string name, bool isDefault = false, bool isVirtual = false) =>
         new(name + "-id", name, isDefault, isVirtual);
 
-    // His actual machine, as DeviceService reports it: real hardware first, cables after.
+    // His actual device list, as DeviceService reports it: real hardware first, cables after.
     var his = new List<AudioDeviceInfo>
     {
         Dev("Speakers (FxSound Audio Enhancer)", isDefault: true),

@@ -215,8 +215,8 @@ public sealed class FolderImporter
             // A library that has been moved wholesale leaves every path pointing at a
             // folder that no longer exists. Rather than dropping the lot, look for each
             // missing file by name in the folders where the surviving files turned up.
-            // Samuel's own library moved from Downloads\OldImportedBoard to Sounds\ImportedBoard,
-            // which without this rescues 4 sounds out of 48.
+            // Samuel's own library moved into a subfolder of its old location, which
+            // without this rescues 4 sounds out of 48.
             var searchDirectories = FoundDirectories();
             var resolved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
