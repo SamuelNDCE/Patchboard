@@ -65,6 +65,13 @@ than losing its first word, and any single sound can override that.
 
 ## What it does
 
+![Patchboard, a grid of soundboard buttons in dark mode, some tinted with the eight built-in colours](docs/screenshot.png)
+
+Every button on that grid is renamed, coloured, and one has its own picture, all through the
+right-click menu. None of that is fixed: every label, colour, image, and its position in the
+grid is yours to set, on every button, at any time. Nothing shown here ships with the app;
+you start from an empty board and build your own.
+
 **Output**
 
 - Play to any number of devices at once, each with its own volume
@@ -72,6 +79,20 @@ than losing its first word, and any single sound can override that.
   something without sending it to everyone
 - Optional microphone passthrough, per output device, off by default
 - A **Mute mic** panic button, and a warning when your routing would create a feedback loop
+- A master volume slider on top of every per-sound and per-device volume
+- **Stop all**, one click, if several sounds are overlapping and you need silence now
+
+**Customising a button** (right-click it)
+
+- **Rename** it to whatever you want; nothing here is a fixed label
+- **Colour**, eight built-in tints, purely to help you find a button at a glance
+- **Image**, any picture you have, filling the tile with the label over it
+
+**Finding a button**
+
+- **Drag to reorder**, anywhere on the grid
+- **Search**, the box at the top of the grid, for when the board has more sounds than fit
+  on screen
 
 **Sounds**
 
@@ -81,7 +102,6 @@ than losing its first word, and any single sound can override that.
 - Any clip length. Long recordings stream from disk instead of being decoded into memory
 - Seek through whatever is playing from the transport bar
 - Global hotkeys that still fire while the window is minimised and a game has focus
-- Colour a button, give it an image, rename it, drag to reorder
 
 **Library**
 

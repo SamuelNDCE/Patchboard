@@ -61,8 +61,16 @@ public sealed class ConfigService
 
     // Declaration order is load bearing: static initialisers run top to bottom, so
     // ConfigDirectory has to be assigned before the two paths built from it.
-    public static string ConfigDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Patchboard");
+    //
+    // PATCHBOARD_CONFIG_DIR overrides the real %APPDATA%\Patchboard entirely, for a
+    // fully isolated run (demo screenshots, a portable copy) that can never read or
+    // write the real user's library. Environment.SpecialFolder.ApplicationData is
+    // resolved from the registry on Windows, not from the APPDATA variable, so there is
+    // no other way to redirect it per process without touching the real folder.
+    public static string ConfigDirectory { get; } = Environment.GetEnvironmentVariable("PATCHBOARD_CONFIG_DIR")
+        is { Length: > 0 } overrideDir
+        ? overrideDir
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Patchboard");
 
     public static string ConfigPath { get; } = Path.Combine(ConfigDirectory, "config.json");
 
