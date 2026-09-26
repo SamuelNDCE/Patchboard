@@ -1,7 +1,41 @@
 # Patchboard
 
-A Windows soundboard that plays to several audio devices at once, so a clip can reach your
-headphones and a voice chat in the same press.
+A Windows soundboard that plays to several audio devices at once, so one click reaches your headphones **and** your voice chat.
+
+## Install
+
+**You need:** Windows 10 or later (64-bit). Nothing else to install for Patchboard itself: it is one file, no installer, no .NET needed.
+
+**Want people in Discord to hear the sounds?** Then you also need a free virtual audio cable (step 3). Skip step 3 if you only want to hear the sounds yourself.
+
+1. **Download `Patchboard.exe`** from the [latest release](https://github.com/SamuelNDCE/Patchboard/releases/latest) (about 65 MB).
+2. **Put it in a folder you will keep**, like `Documents\Patchboard`, and double-click it. There is nothing to install.
+   - Windows may show a blue "Windows protected your PC" box, because the app is not code-signed. Click **More info**, then **Run anyway**.
+3. **Install a virtual cable** (this is what carries the sound into Discord):
+   1. Go to [vb-audio.com/Cable](https://vb-audio.com/Cable/) and download the driver pack (a `.zip`).
+   2. Extract **all** the files from the zip.
+   3. Right-click the setup program (`VBCABLE_Setup_x64.exe` on a 64-bit PC) and choose **Run as administrator**.
+   4. **Restart your PC.** The cable does not appear until you do.
+4. **Open Patchboard again.** On first launch it picks a route for you: your normal speakers or headphones so you hear the sounds, plus the cable so others do. Look at the **OUTPUT** panel on the left and check both are ticked.
+5. **Point Discord at the cable.** Discord, User Settings, Voice & Video, **Input Device**, and choose **CABLE Output (VB-Audio Virtual Cable)**.
+6. **Add sounds.** Drag audio files onto the window, or press **Add sounds**. Click a button to play it. Click again to stop.
+
+You are done. Ask a friend to listen, or watch Discord's input meter move when you click a button.
+
+### If something is wrong
+
+| What you see | What it means | Fix |
+|:---|:---|:---|
+| Amber banner: "No virtual cable selected" | Sound only reaches you, nobody else | Press **Add a cable** in the banner. If it finds nothing, the cable is not installed yet, or you have not restarted since installing it (step 3) |
+| Friends hear nothing, you hear the sound fine | Discord is still listening to your real microphone | Redo step 5: the Input Device must be **CABLE Output** |
+| Friends hear the sound but not your voice | Your voice is not going into the cable | Turn on **microphone passthrough** for the cable in Patchboard's OUTPUT panel (it is off by default) |
+| You hear an echo or feedback | Your routing loops sound back into itself | Patchboard warns when it sees this. Untick the output it names |
+| You use push to talk and the first word is cut off | The channel is not open yet when the clip starts | Set **Delay before playing** in Settings, and hold your talk key while the clip plays |
+| Several sounds are overlapping | Each click starts a new sound | Press **Stop all** |
+
+The first two rows cover nearly every "it does not work" report: Patchboard plays into the cable, and Discord has to be listening to it.
+
+## About
 
 Built because most soundboards play to exactly one output. That is the wrong shape for the job:
 you want to hear the sound yourself *and* have it arrive in Discord, and on a machine with a
@@ -13,7 +47,7 @@ my own machine, and it's shared here in case it's useful to anyone else who want
 single self-contained executable, no installer, no background service, no telemetry, and it's
 open source under MIT, so you can read every line it runs.
 
-## The part everyone gets wrong
+## Why you need a virtual cable
 
 **A soundboard cannot put sound into Discord on its own.** Windows has no way for an app to
 "speak into" your microphone. What actually happens is:
@@ -27,41 +61,11 @@ Patchboard plays to your speakers and nobody else hears a thing. That failure is
 exactly like the app working, which is why Patchboard warns about it explicitly and offers to fix
 the routing in one click.
 
-Either of these works, both are free:
+VB-Cable is free. [VoiceMeeter](https://vb-audio.com/Voicemeeter/), a full mixer, also works if you want more control, with more setup. Patchboard does not install either for you, because they install an audio driver, which an app should not do silently.
 
-- [VB-Cable](https://vb-audio.com/Cable/). Simplest, installs one cable.
-- [VoiceMeeter](https://vb-audio.com/Voicemeeter/). A full mixer, more setup and more control.
+## If you use push to talk
 
-Patchboard does not install either of these for you: they install an audio driver, which is not
-something an app should do silently. Download and install one from the links above, then relaunch
-Patchboard, and it will find it and route to it on its own. If it doesn't, the amber banner's
-**Add a cable** button will pick it up as soon as one is enabled in Windows' Sound settings.
-
-## Requirements
-
-- Windows 10 or later, 64-bit. The dark title bar needs 1809. Below that it is light and everything else works
-- A virtual audio cable, if you want anyone else to hear anything
-- Nothing else. The release build is self-contained, so no .NET install is needed
-
-## Getting started
-
-1. Run `Patchboard.exe`.
-2. On first launch it picks a sensible route on its own: your default playback device, so you
-   hear the sounds, plus a virtual cable if one is installed, so other people do. Check the
-   OUTPUT panel on the left and adjust if it guessed wrong.
-3. Point your voice app's microphone at the same cable. In Discord that is
-   User Settings, Voice & Video, Input Device.
-4. Drag audio files onto the window, or use **Add sounds**.
-5. Click a button to play it. Click it again to stop.
-
-If the amber "No virtual cable selected" banner is showing, sound is only reaching you. Press
-**Add a cable** and it will pick the right one.
-
-### If you use push to talk
-
-Your sounds will not transmit unless the channel is open, so hold your talk key while the clip
-plays. Settings has a **Delay before playing** so the clip starts after the channel opens rather
-than losing its first word, and any single sound can override that.
+Your sounds will not transmit unless the channel is open, so hold your talk key while the clip plays. Settings has a **Delay before playing** so the clip starts after the channel opens rather than losing its first word, and any single sound can override that.
 
 ## What it does
 
